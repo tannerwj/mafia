@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mafia Game - Room</title>
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎭 Mafia Game</h1>
+            <div class="game-info">
+                <span id="player-name-display" class="player-name"></span>
+                <span id="room-id"></span>
+                <span id="phase-indicator"></span>
+                <span id="day-counter"></span>
+            </div>
+        </header>
+        
+        <main>
+            <!-- Lobby Phase -->
+            <div id="lobby-phase" class="game-phase">
+                <h2>Game Lobby</h2>
+                
+                <!-- Host Settings Panel -->
+                <div id="host-settings" class="host-panel hidden">
+                    <h3>🎮 Host Settings</h3>
+                    
+                    <!-- Shareable Link -->
+                    <div class="share-section">
+                        <label>Share this link with players:</label>
+                        <div class="share-link-container">
+                            <input type="text" id="share-link" readonly>
+                            <button id="copy-link-btn" class="secondary-btn">📋 Copy</button>
+                        </div>
+                    </div>
+                    
+                    <div class="settings-grid">
+                        <div class="setting-item">
+                            <label for="game-duration">Day Phase Duration:</label>
+                            <select id="game-duration">
+                                <option value="0" selected>Unlimited</option>
+                                <option value="60">1 minute</option>
+                                <option value="120">2 minutes</option>
+                                <option value="180">3 minutes</option>
+                                <option value="300">5 minutes</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label>Share Game:</label>
+                            <button id="share-lobby-btn" class="secondary-btn">📤 Share Lobby</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Role Configuration -->
+                    <div class="role-config-section">
+                        <h4>🎭 Role Configuration</h4>
+                        <div class="role-settings-grid">
+                            <div class="setting-item">
+                                <label for="mafia-count">Mafia Count:</label>
+                                <select id="mafia-count">
+                                    <option value="auto" selected>Auto (recommended)</option>
+                                    <option value="1">1 Mafia</option>
+                                    <option value="2">2 Mafia</option>
+                                    <option value="3">3 Mafia</option>
+                                </select>
+                            </div>
+                            <div class="setting-item">
+                                <label for="detective-count">Detective Count:</label>
+                                <select id="detective-count">
+                                    <option value="0" selected>0 Detectives</option>
+                                    <option value="1">1 Detective</option>
+                                    <option value="2">2 Detectives</option>
+                                </select>
+                            </div>
+                            <div class="setting-item">
+                                <label for="angel-count">Angel Count:</label>
+                                <select id="angel-count">
+                                    <option value="0" selected>0 Angels</option>
+                                    <option value="1">1 Angel</option>
+                                    <option value="2">2 Angels</option>
+                                </select>
+                            </div>
+                            <div class="setting-item">
+                                <label for="suicide-bomber">Suicide Bomber:</label>
+                                <select id="suicide-bomber">
+                                    <option value="false" selected>Disabled</option>
+                                    <option value="true">Enabled</option>
+                                </select>
+                            </div>
+                            <div class="setting-item">
+                                <label for="minion">Minion:</label>
+                                <select id="minion">
+                                    <option value="false" selected>Disabled</option>
+                                    <option value="true">Enabled</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Host Controls -->
+                    <div class="host-controls">
+                        <button id="start-game-btn" class="primary-btn hidden">Start Game</button>
+                    </div>
+                </div>
+                
+                <div class="players-list">
+                    <h3>Players:</h3>
+                    <ul id="lobby-players"></ul>
+                </div>
+                
+                <div class="lobby-controls">
+                    <input type="text" id="player-name-input" placeholder="Enter your name" maxlength="20">
+                    <button id="join-lobby-btn" class="primary-btn">Join Game</button>
+                </div>
+            </div>
+            
+            <!-- Game Phase -->
+            <div id="game-phase" class="game-phase hidden">
+                <div class="game-controls">
+                    <button id="reveal-role-btn" class="role-btn">👁️ Reveal My Role</button>
+                </div>
+                
+                <div class="players-grid">
+                    <h3>Players:</h3>
+                    <div id="players-list"></div>
+                </div>
+                
+                <!-- Night Phase -->
+                <div id="night-phase" class="phase-content">
+                    <h3>🌙 Night Phase</h3>
+                    <div id="night-actions"></div>
+                </div>
+                
+                <!-- Day Phase -->
+                <div id="day-phase" class="phase-content">
+                    <h3>☀️ Day Phase</h3>
+                    <div id="day-timer"></div>
+                </div>
+                
+                <!-- Voting Phase -->
+                <div id="voting-phase" class="phase-content">
+                    <h3>🗳️ Voting Phase</h3>
+                    <div id="voting-options"></div>
+                </div>
+                
+                <!-- Game Log -->
+                <div class="game-log">
+                    <h3>Game Log:</h3>
+                    <div id="game-log-content"></div>
+                </div>
+            </div>
+            
+            <!-- Game End Phase -->
+            <div id="end-phase" class="game-phase hidden">
+                <h2 id="game-result"></h2>
+                <div class="final-players">
+                    <h3>Final Results:</h3>
+                    <div id="final-players-list"></div>
+                </div>
+                <div class="end-controls">
+                    <button id="new-game-btn" class="primary-btn">New Game</button>
+                    <a href="/" class="secondary-btn">Home</a>
+                </div>
+            </div>
+            
+            <div id="error-message" class="error hidden"></div>
+            <div id="role-modal" class="modal hidden">
+                <div class="modal-content">
+                    <h3>Your Role</h3>
+                    <div id="role-display"></div>
+                    <button id="close-role-modal" class="secondary-btn">Close</button>
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <script src="/js/websocket.js"></script>
+    <script src="/js/ui.js"></script>
+    <script src="/js/game.js"></script>
+</body>
+</html>
