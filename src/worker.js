@@ -1817,7 +1817,7 @@ window.WebSocketManager = WebSocketManager;`,
         };
     }
 
-    showRoleModal(role) {
+    showRoleModal(role, mafiaMembers = []) {
         const modal = document.getElementById('role-modal');
         const roleDisplay = document.getElementById('role-display');
         
@@ -1832,7 +1832,15 @@ window.WebSocketManager = WebSocketManager;`,
             'suicide_bomber': '💣 Suicide Bomber - You win if the villagers eliminate you by vote!'
         };
 
-        roleDisplay.textContent = roleInfo[role] || \`Unknown role: \${role}\`;
+        let roleText = roleInfo[role] || "Unknown role:" + role;
+
+        // Special handling for minion - show mafia members
+        if (role === 'minion' && mafiaMembers.length > 0) {
+            const mafiaNames = mafiaMembers.map(member => member.name).join(', ');
+            roleText += "<br><br><strong>🔪 The Mafia members are:</strong><br>" + mafiaNames;
+        }
+
+        roleDisplay.innerHTML = roleText;
         modal.classList.remove('hidden');
     }
 

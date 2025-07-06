@@ -539,9 +539,17 @@ class UIManager {
             'mafia': '🔪 Mafia - Eliminate villagers and avoid detection!',
             'detective': '🕵️ Detective - Investigate players to find the Mafia!',
             'angel': '👼 Angel - Protect players from being eliminated!',
-            'minion': '🤝 Minion - You know who the Mafia are and want them to win! They don\'t know who you are.',
-            'suicide_bomber': '💣 Suicide Bomber - You win if the villagers eliminate you by vote! Try to get voted out, but not killed by Mafia.'
+            'minion': '🤝 Minion - You know who the Mafia are and want them to win!',
+            'suicide_bomber': '💣 Suicide Bomber - You win if the villagers eliminate you by vote!'
         };
+
+        let roleText = roleInfo[role] || `Unknown role: ${role}`;
+        
+        // Special handling for minion - show mafia members
+        if (role === 'minion' && mafiaMembers.length > 0) {
+            const mafiaNames = mafiaMembers.map(member => member.name).join(', ');
+            roleText += `<br><br><strong>🔪 The Mafia members are:</strong><br>${mafiaNames}`;
+        }
 
         roleDisplay.innerHTML = roleText;
         modal.classList.remove('hidden');
