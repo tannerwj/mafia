@@ -7,7 +7,10 @@ class GameManager {
         this.playerName = null;
         this.playerRole = null;
         this.isHost = false;
+        this.isDead = false;
         this.investigationResults = []; // Store detective investigation results
+        this.rolemates = []; // Store rolemates for coordination
+        this.mafiaMembers = []; // Store mafia members (for minion role)
         this.gameSettings = {
             dayDuration: 0, // 0 = unlimited
             mafiaCount: 'auto',
@@ -212,11 +215,9 @@ class GameManager {
                 if (this.isHost) {
                     // Host starts new game with existing players
                     this.startNewGame();
-                } else {
-                    // Non-host goes to home page
-                    this.clearPersistedState();
-                    window.location.href = '/';
                 }
+                // Note: Non-hosts don't have a new game button in the end screen
+                // They get a notification modal when host starts a new game
             };
         }
 
@@ -245,18 +246,21 @@ class GameManager {
         this.ws.onMessage('role_assigned', (message) => {
             this.playerRole = message.role;
             this.rolemates = message.rolemates || [];
-            this.ui.showRoleModal(message.role);
+            this.mafiaMembers = message.mafiaMembers || [];
+            this.ui.showRoleModal(message.role, this.mafiaMembers);
             
-            // Auto-hide role modal after 3 seconds
+            // Auto-hide role modal after 5 seconds (longer for minion to read mafia info)
             setTimeout(() => {
                 this.ui.hideRoleModal();
-            }, 3000);
+            }, 5000);
         });
 
         this.ws.onMessage('night_action_update', (message) => {
             console.log('Received night_action_update:', message);
-            console.log('Current playerRole:', this.playerRole);
-            if (this.playerRole && ['mafia', 'detective', 'angel'].includes(this.playerRole)) {
+            console.log('Current playerRole:', this.playerRole, 'isDead:', this.isDead);
+            
+            // Only show night actions if player is alive and has a special role
+            if (!this.isDead && this.playerRole && ['mafia', 'detective', 'angel'].includes(this.playerRole)) {
                 console.log('Showing night actions for role:', this.playerRole);
                 this.ui.showNightActions(
                     message.role,
@@ -265,12 +269,12 @@ class GameManager {
                     message.nightActionState
                 );
             } else {
-                console.log('Not showing night actions - role check failed');
+                console.log('Not showing night actions - player is dead or role check failed');
             }
         });
 
         this.ws.onMessage('role_reveal', (message) => {
-            this.ui.showRoleModal(message.role);
+            this.ui.showRoleModal(message.role, message.mafiaMembers || []);
         });
 
         this.ws.onMessage('investigation_result', (message) => {
@@ -398,7 +402,7 @@ class GameManager {
 
     revealRole() {
         if (this.playerRole) {
-            this.ui.showRoleModal(this.playerRole);
+            this.ui.showRoleModal(this.playerRole, this.mafiaMembers);
         } else {
             this.ws.send({
                 type: 'reveal_role'
@@ -414,18 +418,21 @@ class GameManager {
         this.ui.updateGameInfo(gameState, this.playerName, isDead);
         this.ui.updateGameLog(gameState.gameLog);
 
+        // Store dead status for use in other methods
+        this.isDead = isDead;
+
         switch (gameState.phase) {
             case 'lobby':
                 this.handleLobbyPhase(gameState);
                 break;
             case 'night':
-                this.handleNightPhase(gameState);
+                this.handleNightPhase(gameState, isDead);
                 break;
             case 'day':
-                this.handleDayPhase(gameState);
+                this.handleDayPhase(gameState, isDead);
                 break;
             case 'voting':
-                this.handleVotingPhase(gameState);
+                this.handleVotingPhase(gameState, isDead);
                 break;
             case 'ended':
                 this.handleGameEnd(gameState);
@@ -481,15 +488,15 @@ class GameManager {
         this.ui.updatePlayersList(gameState.players, true, this.isHost, gameState.hostId);
     }
 
-    handleNightPhase(gameState) {
-        console.log('handleNightPhase called for day:', gameState.day, 'playerRole:', this.playerRole);
+    handleNightPhase(gameState, isDead = false) {
+        console.log('handleNightPhase called for day:', gameState.day, 'playerRole:', this.playerRole, 'isDead:', isDead);
         this.ui.showPhase('game');
         this.ui.updatePlayersList(gameState.players);
         
-        // Hide/show role reveal button based on host status
+        // Hide/show role reveal button based on host status and death status
         const revealBtn = document.getElementById('reveal-role-btn');
         if (revealBtn) {
-            revealBtn.style.display = this.isHost ? 'none' : 'block';
+            revealBtn.style.display = (this.isHost || isDead) ? 'none' : 'block';
         }
         
         // Hide day/voting content, show night content
@@ -497,31 +504,31 @@ class GameManager {
         document.getElementById('voting-phase').style.display = 'none';
         document.getElementById('night-phase').style.display = 'block';
 
-        if (this.isHost) {
-            // Host sees all players and game state but doesn't participate
-            const nightActions = document.getElementById('night-actions');
-            if (nightActions) {
+        const nightActions = document.getElementById('night-actions');
+        if (nightActions) {
+            if (this.isHost) {
+                // Host sees all players and game state but doesn't participate
                 nightActions.innerHTML = '<p>🌙 Night Phase - Players are making their moves...</p>';
-            }
-        } else {
-            // Don't show night actions here - wait for night_action_update message
-            // which will have the proper coordination state
-            const nightActions = document.getElementById('night-actions');
-            if (nightActions) {
+            } else if (isDead) {
+                // Dead players cannot participate in night actions
+                nightActions.innerHTML = '<p>💀 You are dead and cannot participate in night actions. Watch and wait for the next day...</p>';
+            } else {
+                // Don't show night actions here - wait for night_action_update message
+                // which will have the proper coordination state
                 console.log('Setting waiting message for night actions');
                 nightActions.innerHTML = '<p>🌙 Night Phase - Waiting for role coordination...</p>';
             }
         }
     }
 
-    handleDayPhase(gameState) {
+    handleDayPhase(gameState, isDead = false) {
         this.ui.showPhase('game');
         this.ui.updatePlayersList(gameState.players);
         
-        // Hide/show role reveal button based on host status
+        // Hide/show role reveal button based on host status and death status
         const revealBtn = document.getElementById('reveal-role-btn');
         if (revealBtn) {
-            revealBtn.style.display = this.isHost ? 'none' : 'block';
+            revealBtn.style.display = (this.isHost || isDead) ? 'none' : 'block';
         }
         
         // Hide night content, show both day and voting content
@@ -532,8 +539,8 @@ class GameManager {
         // Hide role action interfaces during day phase
         this.ui.hideNightActions();
 
-        // Show investigation results if detective
-        if (this.playerRole === 'detective' && this.investigationResults.length > 0) {
+        // Show investigation results if detective and alive
+        if (this.playerRole === 'detective' && this.investigationResults.length > 0 && !isDead) {
             const dayTimer = document.getElementById('day-timer');
             if (dayTimer) {
                 dayTimer.innerHTML = `
@@ -545,21 +552,49 @@ class GameManager {
             }
         }
 
+        // Show mafia members if minion and alive
+        console.log('Day phase - Player role:', this.playerRole, 'Mafia members:', this.mafiaMembers, 'Is dead:', isDead);
+        if (this.playerRole === 'minion' && this.mafiaMembers.length > 0 && !isDead) {
+            const dayTimer = document.getElementById('day-timer');
+            if (dayTimer) {
+                const mafiaNames = this.mafiaMembers.map(m => m.name).join(', ');
+                dayTimer.innerHTML = `
+                    <div class="mafia-info">
+                        <h4>🔪 The Mafia Team:</h4>
+                        <p><strong>${mafiaNames}</strong></p>
+                        <p><em>Help them win without revealing yourself!</em></p>
+                    </div>
+                `;
+            }
+        }
+
         // Show voting interface immediately (combined day/voting phase)
-        if (!this.isHost) {
-            const alivePlayers = gameState.players.filter(p => p.alive);
-            this.ui.showVotingInterface(alivePlayers, this.isHost);
-        } else {
-            const votingOptions = document.getElementById('voting-options');
-            if (votingOptions) {
+        const votingOptions = document.getElementById('voting-options');
+        if (votingOptions) {
+            // Double-check if current player is dead by looking at game state
+            const currentPlayer = gameState.players.find(p => p.id === this.playerId);
+            const isPlayerDead = isDead || (currentPlayer && !currentPlayer.alive);
+            
+            if (isPlayerDead) {
+                // Dead players get a clear message with no voting options
+                votingOptions.innerHTML = `
+                    <div class="dead-player-message">
+                        <h4>💀 You are dead</h4>
+                        <p>You cannot participate in voting. Watch the remaining players decide who to eliminate.</p>
+                    </div>
+                `;
+            } else if (this.isHost) {
                 votingOptions.innerHTML = '<p>🗳️ As the host, you observe the voting but do not participate.</p>';
+            } else {
+                const alivePlayers = gameState.players.filter(p => p.alive);
+                this.ui.showVotingInterface(alivePlayers, this.isHost, isPlayerDead);
             }
         }
     }
 
-    handleVotingPhase(gameState) {
+    handleVotingPhase(gameState, isDead = false) {
         // Voting is now combined with day phase
-        this.handleDayPhase(gameState);
+        this.handleDayPhase(gameState, isDead);
     }
 
     handleGameEnd(gameState) {
@@ -573,8 +608,12 @@ class GameManager {
     }
 
     handleNewGameStarted(message) {
-        // Reset investigation results
+        // Reset investigation results and role info
         this.investigationResults = [];
+        this.playerRole = null;
+        this.rolemates = [];
+        this.mafiaMembers = [];
+        this.isDead = false;
         
         // Show notification with option to leave
         this.ui.showNewGameNotification(message.message, this.isHost);

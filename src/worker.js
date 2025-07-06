@@ -1827,7 +1827,9 @@ window.WebSocketManager = WebSocketManager;`,
             'villager': '👨‍🌾 Villager - Find and eliminate the Mafia!',
             'mafia': '🔪 Mafia - Eliminate villagers and avoid detection!',
             'detective': '🕵️ Detective - Investigate players to find the Mafia!',
-            'angel': '👼 Angel - Protect players from being eliminated!'
+            'angel': '👼 Angel - Protect players from being eliminated!',
+            'minion': '🤝 Minion - You know who the Mafia are and want them to win!',
+            'suicide_bomber': '💣 Suicide Bomber - You win if the villagers eliminate you by vote!'
         };
 
         roleDisplay.textContent = roleInfo[role] || \`Unknown role: \${role}\`;

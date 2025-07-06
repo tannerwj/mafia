@@ -285,7 +285,7 @@ export class GameRoom {
     // Angel count (default based on player count)
     angelCount = settings.angelCount !== undefined ?
       parseInt(settings.angelCount) :
-      (numPlayers >= 8 ? 1 : 0);
+      (numPlayers >= 5 ? 1 : 0);
     
     // Special roles
     const hasSuicideBomber = settings.suicideBomber === true;
@@ -296,10 +296,28 @@ export class GameRoom {
       (hasSuicideBomber ? 1 : 0) + (hasMinion ? 1 : 0);
     
     if (totalSpecialRoles >= numPlayers) {
-      // Fallback to simple assignment if too many special roles
-      mafiaCount = 1;
-      detectiveCount = 0;
-      angelCount = 0;
+      // Adjust roles to fit player count, prioritizing core roles
+      // Always keep at least 1 mafia
+      mafiaCount = Math.max(1, Math.min(mafiaCount, Math.floor(numPlayers / 3)));
+      
+      // Recalculate remaining slots
+      let remainingSlots = numPlayers - mafiaCount - (hasSuicideBomber ? 1 : 0) - (hasMinion ? 1 : 0);
+      
+      // Distribute remaining slots between detective and angel
+      detectiveCount = Math.min(detectiveCount, Math.floor(remainingSlots / 2));
+      angelCount = Math.min(angelCount, remainingSlots - detectiveCount);
+      
+      // Ensure at least 1 villager remains
+      const finalSpecialRoles = mafiaCount + detectiveCount + angelCount +
+        (hasSuicideBomber ? 1 : 0) + (hasMinion ? 1 : 0);
+      if (finalSpecialRoles >= numPlayers) {
+        // If still too many, reduce angel count first, then detective
+        if (angelCount > 0) angelCount = Math.max(0, angelCount - (finalSpecialRoles - numPlayers + 1));
+        if (detectiveCount > 0 && (mafiaCount + detectiveCount + angelCount +
+          (hasSuicideBomber ? 1 : 0) + (hasMinion ? 1 : 0)) >= numPlayers) {
+          detectiveCount = Math.max(0, detectiveCount - 1);
+        }
+      }
     }
     
     // Shuffle players
@@ -365,10 +383,19 @@ export class GameRoom {
         // Get rolemates for coordination
         const rolemates = this.getRolemates(gameState, player.role, playerId);
         
+        // Special case for minion - they can see who the mafia are
+        let mafiaMembers = [];
+        if (player.role === 'minion') {
+          mafiaMembers = Array.from(gameState.players.values())
+            .filter(p => p.role === 'mafia')
+            .map(p => ({ id: p.id, name: p.name }));
+        }
+        
         session.webSocket.send(JSON.stringify({
           type: 'role_assigned',
           role: player.role,
-          rolemates: rolemates
+          rolemates: rolemates,
+          mafiaMembers: mafiaMembers
         }));
       }
     }
@@ -393,6 +420,10 @@ export class GameRoom {
     
     if (!session || !session.playerId) {
       console.error('No session or playerId found for night action');
+      session?.webSocket?.send(JSON.stringify({
+        type: 'error',
+        message: 'Invalid session'
+      }));
       return;
     }
     
@@ -400,16 +431,28 @@ export class GameRoom {
 
     if (gameState.phase !== 'night') {
       console.log('Not night phase, ignoring action');
+      session.webSocket.send(JSON.stringify({
+        type: 'error',
+        message: 'Night actions can only be performed during the night phase'
+      }));
       return;
     }
     
     if (!player) {
       console.error('Player not found for night action:', session.playerId);
+      session.webSocket.send(JSON.stringify({
+        type: 'error',
+        message: 'Player not found'
+      }));
       return;
     }
     
     if (!player.alive) {
       console.log('Dead player trying to act:', player.name);
+      session.webSocket.send(JSON.stringify({
+        type: 'error',
+        message: 'Dead players cannot perform night actions'
+      }));
       return;
     }
 
@@ -456,7 +499,11 @@ export class GameRoom {
     console.log('Alive players:', alivePlayers.map(p => p.name));
     
     for (const [playerId, player] of gameState.players) {
-      if (!player.alive) continue;
+      // Only send night action updates to alive players with special roles
+      if (!player.alive || !['mafia', 'detective', 'angel'].includes(player.role)) {
+        console.log(`Skipping night action update for ${player.name} - dead or no special role`);
+        continue;
+      }
       
       const session = this.sessions.get(player.sessionId);
       if (!session || !session.webSocket) {
@@ -688,27 +735,48 @@ export class GameRoom {
       return;
     }
 
+    // Add transition message and move directly to voting phase
+    gameState.gameLog.push('☀️ Day phase begins - Discuss what happened during the night and vote to eliminate someone!');
+    gameState.phase = 'voting';
+    await this.saveGameState(gameState);
     await this.broadcastGameState();
-    
-    // Add transition message and auto-transition to voting after 8 seconds
-    setTimeout(async () => {
-      const currentState = await this.getGameState();
-      if (currentState.phase === 'day') {
-        // Add transition message
-        currentState.gameLog.push('☀️ Day phase begins - Discuss what happened during the night and vote to eliminate someone!');
-        currentState.phase = 'voting';
-        await this.saveGameState(currentState);
-        await this.broadcastGameState();
-      }
-    }, 8000);
   }
 
   async handleDayVote(sessionId, vote) {
     const gameState = await this.getGameState();
     const session = this.sessions.get(sessionId);
+    
+    if (!session || !session.playerId) {
+      session?.webSocket?.send(JSON.stringify({
+        type: 'error',
+        message: 'Invalid session'
+      }));
+      return;
+    }
+    
     const player = gameState.players.get(session.playerId);
 
-    if (gameState.phase !== 'voting' || !player || !player.alive) {
+    if (gameState.phase !== 'voting') {
+      session.webSocket.send(JSON.stringify({
+        type: 'error',
+        message: 'Voting can only be done during the voting phase'
+      }));
+      return;
+    }
+    
+    if (!player) {
+      session.webSocket.send(JSON.stringify({
+        type: 'error',
+        message: 'Player not found'
+      }));
+      return;
+    }
+    
+    if (!player.alive) {
+      session.webSocket.send(JSON.stringify({
+        type: 'error',
+        message: 'Dead players cannot vote'
+      }));
       return;
     }
 
@@ -746,6 +814,16 @@ export class GameRoom {
       const victim = gameState.players.get(eliminatedPlayer);
       victim.alive = false;
       gameState.gameLog.push(`${victim.name} was eliminated by village vote (${victim.role})`);
+      
+      // Check for suicide bomber win condition BEFORE other win conditions
+      if (victim.role === 'suicide_bomber') {
+        gameState.phase = 'ended';
+        gameState.winner = 'suicide_bomber';
+        gameState.gameLog.push('💣 Suicide Bomber wins! They were eliminated by the village vote.');
+        await this.saveGameState(gameState);
+        await this.broadcastGameState();
+        return;
+      }
     } else {
       gameState.gameLog.push('No one was eliminated this round');
     }
@@ -780,17 +858,22 @@ export class GameRoom {
 
   async checkWinConditions(gameState) {
     const alivePlayers = Array.from(gameState.players.values()).filter(p => p.alive);
-    const aliveMafia = alivePlayers.filter(p => p.role === 'mafia' || p.role === 'minion');
+    const aliveMafia = alivePlayers.filter(p => p.role === 'mafia');
+    const aliveMinions = alivePlayers.filter(p => p.role === 'minion');
+    const aliveMafiaTeam = aliveMafia.length + aliveMinions.length; // Total mafia team
     const aliveVillage = alivePlayers.filter(p =>
       ['villager', 'detective', 'angel', 'suicide_bomber'].includes(p.role)
     );
 
     let winner = null;
     
+    // Village wins if all actual mafia are eliminated (minions don't count for mafia elimination)
     if (aliveMafia.length === 0) {
       winner = 'village';
       gameState.gameLog.push('Village wins! All Mafia have been eliminated.');
-    } else if (aliveMafia.length >= aliveVillage.length) {
+    }
+    // Mafia wins if mafia team (mafia + minions) equals or outnumbers village
+    else if (aliveMafiaTeam >= aliveVillage.length) {
       winner = 'mafia';
       gameState.gameLog.push('Mafia wins! They equal or outnumber the Village.');
     }
@@ -812,9 +895,18 @@ export class GameRoom {
     const player = gameState.players.get(session.playerId);
 
     if (player) {
+      // Special case for minion - they can see who the mafia are
+      let mafiaMembers = [];
+      if (player.role === 'minion') {
+        mafiaMembers = Array.from(gameState.players.values())
+          .filter(p => p.role === 'mafia')
+          .map(p => ({ id: p.id, name: p.name }));
+      }
+      
       session.webSocket.send(JSON.stringify({
         type: 'role_reveal',
-        role: player.role
+        role: player.role,
+        mafiaMembers: mafiaMembers
       }));
     }
   }
@@ -895,7 +987,7 @@ export class GameRoom {
       id: player.id,
       name: player.name,
       alive: player.alive,
-      role: player.alive ? null : player.role // Only reveal role if dead
+      role: gameState.phase === 'ended' ? player.role : (player.alive ? null : player.role) // Reveal all roles when game ends
     }));
 
     return {

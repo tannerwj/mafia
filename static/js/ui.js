@@ -457,13 +457,24 @@ class UIManager {
         };
     }
 
-    showVotingInterface(alivePlayers, isHost = false) {
+    showVotingInterface(alivePlayers, isHost = false, isDead = false) {
         const container = document.getElementById('voting-options');
         if (!container) return;
 
         // If host, show message that they don't vote
         if (isHost) {
             container.innerHTML = '<p>🎮 As the host, you observe the voting but do not participate.</p>';
+            return;
+        }
+
+        // If dead, show message that they can't vote - no voting interface
+        if (isDead) {
+            container.innerHTML = `
+                <div class="dead-player-message">
+                    <h4>💀 You are dead</h4>
+                    <p>You cannot participate in voting. Watch the remaining players decide who to eliminate.</p>
+                </div>
+            `;
             return;
         }
 
@@ -517,7 +528,7 @@ class UIManager {
         };
     }
 
-    showRoleModal(role) {
+    showRoleModal(role, mafiaMembers = []) {
         const modal = document.getElementById('role-modal');
         const roleDisplay = document.getElementById('role-display');
         
@@ -527,10 +538,12 @@ class UIManager {
             'villager': '👨‍🌾 Villager - Find and eliminate the Mafia!',
             'mafia': '🔪 Mafia - Eliminate villagers and avoid detection!',
             'detective': '🕵️ Detective - Investigate players to find the Mafia!',
-            'angel': '👼 Angel - Protect players from being eliminated!'
+            'angel': '👼 Angel - Protect players from being eliminated!',
+            'minion': '🤝 Minion - You know who the Mafia are and want them to win! They don\'t know who you are.',
+            'suicide_bomber': '💣 Suicide Bomber - You win if the villagers eliminate you by vote! Try to get voted out, but not killed by Mafia.'
         };
 
-        roleDisplay.textContent = roleInfo[role] || `Unknown role: ${role}`;
+        roleDisplay.innerHTML = roleText;
         modal.classList.remove('hidden');
     }
 
@@ -568,7 +581,8 @@ class UIManager {
         if (resultEl) {
             const winnerText = {
                 'village': '🎉 Village Wins!',
-                'mafia': '🔪 Mafia Wins!'
+                'mafia': '🔪 Mafia Wins!',
+                'suicide_bomber': '💣 Suicide Bomber Wins!'
             };
             resultEl.textContent = winnerText[winner] || `Game Over - ${winner} wins!`;
         }
@@ -595,6 +609,14 @@ class UIManager {
                     <button id="new-game-btn" class="primary-btn">New Game</button>
                     <a href="/" class="secondary-btn">Home</a>
                 `;
+                
+                // Attach event handler to the new button
+                const newGameBtn = document.getElementById('new-game-btn');
+                if (newGameBtn && window.gameManager) {
+                    newGameBtn.onclick = () => {
+                        window.gameManager.startNewGame();
+                    };
+                }
             } else {
                 endControls.innerHTML = `
                     <p>Waiting for host to start a new game...</p>
