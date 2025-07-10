@@ -99,6 +99,110 @@ class UIManager {
         }
     }
 
+    showHostDashboard(gameState, isHost = false) {
+        const hostDashboard = document.getElementById('host-dashboard');
+        const playerInterface = document.getElementById('player-interface');
+        
+        if (isHost && hostDashboard && playerInterface) {
+            // Show host dashboard, hide player interface
+            hostDashboard.classList.remove('hidden');
+            playerInterface.classList.add('hidden');
+            
+            // Update role assignments
+            this.updateHostRoleList(gameState.players);
+            
+            // Update player status
+            this.updateHostPlayerStatus(gameState.players);
+            
+            // Update game log
+            this.updateHostGameLog(gameState.gameLog);
+        } else if (hostDashboard && playerInterface) {
+            // Show player interface, hide host dashboard
+            hostDashboard.classList.add('hidden');
+            playerInterface.classList.remove('hidden');
+        }
+    }
+
+    updateHostRoleList(players) {
+        const container = document.getElementById('host-role-list');
+        if (!container) return;
+
+        const roleGroups = {};
+        players.forEach(player => {
+            if (!roleGroups[player.role]) {
+                roleGroups[player.role] = [];
+            }
+            roleGroups[player.role].push(player);
+        });
+
+        container.innerHTML = '';
+        Object.entries(roleGroups).forEach(([role, playersInRole]) => {
+            const roleDiv = document.createElement('div');
+            roleDiv.className = 'role-group';
+            
+            const roleEmojis = {
+                'mafia': '🔪',
+                'villager': '👨‍🌾',
+                'detective': '🕵️',
+                'angel': '👼',
+                'minion': '🤝',
+                'suicide_bomber': '💣'
+            };
+            
+            const roleEmoji = roleEmojis[role] || '❓';
+            const roleName = role.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+            
+            roleDiv.innerHTML = `
+                <h5>${roleEmoji} ${roleName} (${playersInRole.length})</h5>
+                <ul>
+                    ${playersInRole.map(player =>
+                        `<li class="${player.alive ? 'alive' : 'dead'}">${player.name} ${player.alive ? '✅' : '💀'}</li>`
+                    ).join('')}
+                </ul>
+            `;
+            container.appendChild(roleDiv);
+        });
+    }
+
+    updateHostPlayerStatus(players) {
+        const container = document.getElementById('host-player-status');
+        if (!container) return;
+
+        const alivePlayers = players.filter(p => p.alive);
+        const deadPlayers = players.filter(p => !p.alive);
+
+        container.innerHTML = `
+            <div class="status-summary">
+                <div class="alive-count">✅ Alive: ${alivePlayers.length}</div>
+                <div class="dead-count">💀 Dead: ${deadPlayers.length}</div>
+            </div>
+            <div class="player-details">
+                ${alivePlayers.map(player =>
+                    `<div class="player-status alive">${player.name} (${player.role})</div>`
+                ).join('')}
+                ${deadPlayers.map(player =>
+                    `<div class="player-status dead">${player.name} (${player.role})</div>`
+                ).join('')}
+            </div>
+        `;
+    }
+
+    updateHostGameLog(gameLog) {
+        const container = document.getElementById('host-game-log');
+        if (!container) return;
+
+        container.innerHTML = '';
+        gameLog.forEach(entry => {
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            div.textContent = entry;
+            container.appendChild(div);
+        });
+
+        // Scroll to bottom
+        container.scrollTop = container.scrollHeight;
+    }
+
     showHostSettings(isVisible, roomId = null) {
         console.log('showHostSettings called:', { isVisible, roomId }); // Debug
         const hostPanel = document.getElementById('host-settings');

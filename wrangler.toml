@@ -2,9 +2,13 @@ name = "mafia-game"
 main = "src/worker.js"
 compatibility_date = "2024-01-01"
 
+# Static assets configuration
+[assets]
+directory = "./static"
+
 [durable_objects]
 bindings = [
-  { name = "GAME_ROOM", class_name = "GameRoom", script_name = "mafia-game" }
+  { name = "GAME_ROOMS", class_name = "GameRoom", script_name = "mafia-game" }
 ]
 
 [[durable_objects.migrations]]

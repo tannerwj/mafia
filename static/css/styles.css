@@ -668,3 +668,155 @@ main {
         grid-template-columns: 1fr;
     }
 }
+
+/* Host Dashboard */
+.host-dashboard {
+    background: #f8f9fa;
+    border-radius: 12px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+    border: 2px solid #667eea;
+}
+
+.host-dashboard h3 {
+    color: #667eea;
+    text-align: center;
+    margin-bottom: 2rem;
+    font-size: 1.5rem;
+}
+
+.host-info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    margin-bottom: 2rem;
+}
+
+.role-assignments, .player-status {
+    background: white;
+    border-radius: 8px;
+    padding: 1.5rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.role-assignments h4, .player-status h4 {
+    color: #667eea;
+    margin-bottom: 1rem;
+    font-size: 1.2rem;
+    text-align: center;
+}
+
+.role-group {
+    margin-bottom: 1rem;
+    padding: 1rem;
+    background: #f8f9fa;
+    border-radius: 6px;
+    border-left: 4px solid #667eea;
+}
+
+.role-group h5 {
+    margin-bottom: 0.5rem;
+    color: #333;
+    font-size: 1rem;
+}
+
+.role-group ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.role-group li {
+    padding: 0.25rem 0;
+    font-size: 0.9rem;
+}
+
+.role-group li.alive {
+    color: #28a745;
+}
+
+.role-group li.dead {
+    color: #dc3545;
+    text-decoration: line-through;
+    opacity: 0.7;
+}
+
+.status-summary {
+    display: flex;
+    justify-content: space-around;
+    margin-bottom: 1rem;
+    padding: 1rem;
+    background: #e9ecef;
+    border-radius: 6px;
+}
+
+.alive-count {
+    color: #28a745;
+    font-weight: bold;
+}
+
+.dead-count {
+    color: #dc3545;
+    font-weight: bold;
+}
+
+.player-details {
+    display: grid;
+    gap: 0.5rem;
+}
+
+.player-status {
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+
+.player-status.alive {
+    background: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.player-status.dead {
+    background: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+    text-decoration: line-through;
+    opacity: 0.7;
+}
+
+#host-game-log {
+    background: white;
+    border-radius: 8px;
+    padding: 1.5rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+#host-game-log h4 {
+    color: #667eea;
+    margin-bottom: 1rem;
+    font-size: 1.2rem;
+    text-align: center;
+}
+
+.game-controls {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+/* Responsive design for host dashboard */
+@media (max-width: 768px) {
+    .host-info-grid {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+    }
+    
+    .game-controls {
+        flex-direction: column;
+        align-items: center;
+    }
+}

@@ -47,10 +47,6 @@
                                 <option value="300">5 minutes</option>
                             </select>
                         </div>
-                        <div class="setting-item">
-                            <label>Share Game:</label>
-                            <button id="share-lobby-btn" class="secondary-btn">📤 Share Lobby</button>
-                        </div>
                     </div>
                     
                     <!-- Role Configuration -->
@@ -102,6 +98,7 @@
                     <!-- Host Controls -->
                     <div class="host-controls">
                         <button id="start-game-btn" class="primary-btn hidden">Start Game</button>
+                        <button id="reset-game-btn" class="secondary-btn">🔄 Reset Game</button>
                     </div>
                 </div>
                 
@@ -113,18 +110,42 @@
                 <div class="lobby-controls">
                     <input type="text" id="player-name-input" placeholder="Enter your name" maxlength="20">
                     <button id="join-lobby-btn" class="primary-btn">Join Game</button>
+                    <button id="clear-storage-lobby-btn" class="secondary-btn">🔄 Reset Game</button>
                 </div>
             </div>
             
             <!-- Game Phase -->
             <div id="game-phase" class="game-phase hidden">
-                <div class="game-controls">
-                    <button id="reveal-role-btn" class="role-btn">👁️ Reveal My Role</button>
+                <!-- Host Dashboard -->
+                <div id="host-dashboard" class="host-dashboard hidden">
+                    <h3>🎮 Host Dashboard</h3>
+                    <div class="host-info-grid">
+                        <div class="role-assignments">
+                            <h4>🎭 Role Assignments</h4>
+                            <div id="host-role-list"></div>
+                        </div>
+                        <div class="player-status">
+                            <h4>👥 Player Status</h4>
+                            <div id="host-player-status"></div>
+                        </div>
+                    </div>
+                    <div class="game-log">
+                        <h4>📜 Game Log</h4>
+                        <div id="host-game-log"></div>
+                    </div>
                 </div>
                 
-                <div class="players-grid">
-                    <h3>Players:</h3>
-                    <div id="players-list"></div>
+                <!-- Player Interface -->
+                <div id="player-interface" class="player-interface">
+                    <div class="game-controls">
+                        <button id="reveal-role-btn" class="role-btn">👁️ Reveal My Role</button>
+                        <button id="clear-storage-btn" class="secondary-btn">🔄 Reset Game</button>
+                    </div>
+                    
+                    <div class="players-grid">
+                        <h3>Players:</h3>
+                        <div id="players-list"></div>
+                    </div>
                 </div>
                 
                 <!-- Night Phase -->

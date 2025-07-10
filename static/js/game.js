@@ -11,6 +11,7 @@ class GameManager {
         this.investigationResults = []; // Store detective investigation results
         this.rolemates = []; // Store rolemates for coordination
         this.mafiaMembers = []; // Store mafia members (for minion role)
+        this.gameState = null; // Store full game state for persistence
         this.gameSettings = {
             dayDuration: 0, // 0 = unlimited
             mafiaCount: 'auto',
@@ -22,7 +23,6 @@ class GameManager {
         
         this.setupEventHandlers();
         this.setupWebSocketHandlers();
-        this.loadPersistedState();
     }
 
     init() {
@@ -51,17 +51,39 @@ class GameManager {
             }
         }
 
+        // Load persisted state after host status is determined
+        this.loadPersistedState();
+
         // Connect to WebSocket
         this.ws.connect(this.roomId);
         
-        // If host, send host identification after connection
-        if (this.isHost && this.playerName) {
+        // If we have persisted state, try to reconnect
+        if (this.playerId && this.playerName) {
+            // Hide join controls immediately for reconnecting players
+            if (!this.isHost) {
+                this.hideJoinControls();
+            }
+            
             setTimeout(() => {
-                console.log('Sending host_connect message'); // Debug
-                this.ws.send({
-                    type: 'host_connect',
-                    hostName: 'host'
-                });
+                if (this.isHost) {
+                    console.log('Reconnecting as host'); // Debug
+                    this.ws.send({
+                        type: 'host_connect',
+                        hostName: 'host'
+                    });
+                } else {
+                    console.log(`Reconnecting as player: ${this.playerName} with ID: ${this.playerId}`); // Debug
+                    const message = {
+                        type: 'join_game',
+                        playerName: this.playerName
+                    };
+                    
+                    if (this.playerId) {
+                        message.existingPlayerId = this.playerId;
+                    }
+                    
+                    this.ws.send(message);
+                }
             }, 500);
         }
     }
@@ -221,6 +243,24 @@ class GameManager {
             };
         }
 
+        // Clear storage buttons
+        const clearStorageBtn = document.getElementById('clear-storage-btn');
+        const clearStorageLobbyBtn = document.getElementById('clear-storage-lobby-btn');
+        
+        if (clearStorageBtn) {
+            clearStorageBtn.onclick = () => this.handleClearStorage();
+        }
+        
+        if (clearStorageLobbyBtn) {
+            clearStorageLobbyBtn.onclick = () => this.handleClearStorage();
+        }
+
+        // Reset game button for host
+        const resetGameBtn = document.getElementById('reset-game-btn');
+        if (resetGameBtn) {
+            resetGameBtn.onclick = () => this.handleClearStorage();
+        }
+
         // Handle page refresh/reload
         window.addEventListener('beforeunload', () => {
             this.savePersistedState();
@@ -236,11 +276,17 @@ class GameManager {
             this.playerId = message.playerId;
             this.playerName = message.playerName;
             
-            // Hide join controls after successfully joining
-            const lobbyControls = document.querySelector('.lobby-controls');
-            if (lobbyControls && !this.isHost) {
-                lobbyControls.style.display = 'none';
+            // Save state immediately after joining/reconnecting
+            this.savePersistedState();
+            
+            if (message.isReconnecting) {
+                console.log('Successfully reconnected as existing player');
+            } else {
+                console.log('Successfully joined as new player');
             }
+            
+            // Hide join controls after successfully joining
+            this.hideJoinControls();
         });
 
         this.ws.onMessage('role_assigned', (message) => {
@@ -289,6 +335,13 @@ class GameManager {
 
         this.ws.onMessage('error', (message) => {
             this.ui.showError(message.message);
+            
+            // Show join controls again if there was an error joining
+            if (message.message.includes('name already exists') ||
+                message.message.includes('choose a different name') ||
+                message.message.includes('Game already in progress')) {
+                this.showJoinControls();
+            }
         });
 
         this.ws.onConnectionStatusChange = (connected) => {
@@ -316,16 +369,20 @@ class GameManager {
 
         this.playerName = playerName;
         
-        this.ws.send({
+        // Send existing player ID if we have one for reconnection
+        const message = {
             type: 'join_game',
             playerName: playerName
-        });
+        };
+        
+        if (this.playerId) {
+            message.existingPlayerId = this.playerId;
+        }
+        
+        this.ws.send(message);
 
-        // Hide join controls
-        const joinBtn = document.getElementById('join-lobby-btn');
-        const nameInput2 = document.getElementById('player-name-input');
-        if (joinBtn) joinBtn.style.display = 'none';
-        if (nameInput2) nameInput2.style.display = 'none';
+        // Don't hide join controls immediately - wait for success response
+        // They will be hidden in the player_joined handler
     }
 
     startGame() {
@@ -411,6 +468,9 @@ class GameManager {
     }
 
     handleGameStateUpdate(gameState) {
+        // Store the full game state for persistence
+        this.gameState = gameState;
+        
         // Check if current player is dead
         const currentPlayer = gameState.players.find(p => p.id === this.playerId);
         const isDead = currentPlayer && !currentPlayer.alive;
@@ -420,6 +480,9 @@ class GameManager {
 
         // Store dead status for use in other methods
         this.isDead = isDead;
+
+        // Save state after each update
+        this.savePersistedState();
 
         switch (gameState.phase) {
             case 'lobby':
@@ -491,12 +554,18 @@ class GameManager {
     handleNightPhase(gameState, isDead = false) {
         console.log('handleNightPhase called for day:', gameState.day, 'playerRole:', this.playerRole, 'isDead:', isDead);
         this.ui.showPhase('game');
-        this.ui.updatePlayersList(gameState.players);
         
-        // Hide/show role reveal button based on host status and death status
-        const revealBtn = document.getElementById('reveal-role-btn');
-        if (revealBtn) {
-            revealBtn.style.display = (this.isHost || isDead) ? 'none' : 'block';
+        // Show appropriate interface based on host status
+        this.ui.showHostDashboard(gameState, this.isHost);
+        
+        if (!this.isHost) {
+            this.ui.updatePlayersList(gameState.players);
+            
+            // Hide/show role reveal button based on death status
+            const revealBtn = document.getElementById('reveal-role-btn');
+            if (revealBtn) {
+                revealBtn.style.display = isDead ? 'none' : 'block';
+            }
         }
         
         // Hide day/voting content, show night content
@@ -523,12 +592,22 @@ class GameManager {
 
     handleDayPhase(gameState, isDead = false) {
         this.ui.showPhase('game');
+        
+        // Show appropriate interface based on host status
+        this.ui.showHostDashboard(gameState, this.isHost);
+        
+        if (this.isHost) {
+            // Host doesn't need player interface elements
+            return;
+        }
+        
+        // Player interface
         this.ui.updatePlayersList(gameState.players);
         
-        // Hide/show role reveal button based on host status and death status
+        // Hide/show role reveal button based on death status
         const revealBtn = document.getElementById('reveal-role-btn');
         if (revealBtn) {
-            revealBtn.style.display = (this.isHost || isDead) ? 'none' : 'block';
+            revealBtn.style.display = isDead ? 'none' : 'block';
         }
         
         // Hide night content, show both day and voting content
@@ -583,8 +662,6 @@ class GameManager {
                         <p>You cannot participate in voting. Watch the remaining players decide who to eliminate.</p>
                     </div>
                 `;
-            } else if (this.isHost) {
-                votingOptions.innerHTML = '<p>🗳️ As the host, you observe the voting but do not participate.</p>';
             } else {
                 const alivePlayers = gameState.players.filter(p => p.alive);
                 this.ui.showVotingInterface(alivePlayers, this.isHost, isPlayerDead);
@@ -593,8 +670,81 @@ class GameManager {
     }
 
     handleVotingPhase(gameState, isDead = false) {
-        // Voting is now combined with day phase
-        this.handleDayPhase(gameState, isDead);
+        this.ui.showPhase('game');
+        
+        // Show appropriate interface based on host status
+        this.ui.showHostDashboard(gameState, this.isHost);
+        
+        if (this.isHost) {
+            // Host doesn't need player interface elements
+            return;
+        }
+        
+        // Player interface
+        this.ui.updatePlayersList(gameState.players);
+        
+        // Hide/show role reveal button based on death status
+        const revealBtn = document.getElementById('reveal-role-btn');
+        if (revealBtn) {
+            revealBtn.style.display = isDead ? 'none' : 'block';
+        }
+        
+        // Hide night content, show both day and voting content
+        document.getElementById('night-phase').style.display = 'none';
+        document.getElementById('day-phase').style.display = 'block';
+        document.getElementById('voting-phase').style.display = 'block';
+
+        // Hide role action interfaces during voting phase
+        this.ui.hideNightActions();
+
+        // Show investigation results if detective and alive
+        if (this.playerRole === 'detective' && this.investigationResults.length > 0 && !isDead) {
+            const dayTimer = document.getElementById('day-timer');
+            if (dayTimer) {
+                dayTimer.innerHTML = `
+                    <div class="investigation-results">
+                        <h4>🕵️ Your Investigation Results:</h4>
+                        ${this.investigationResults.map(result => `<p>${result}</p>`).join('')}
+                    </div>
+                `;
+            }
+        }
+
+        // Show mafia members if minion and alive
+        if (this.playerRole === 'minion' && this.mafiaMembers.length > 0 && !isDead) {
+            const dayTimer = document.getElementById('day-timer');
+            if (dayTimer) {
+                const mafiaNames = this.mafiaMembers.map(m => m.name).join(', ');
+                dayTimer.innerHTML = `
+                    <div class="mafia-info">
+                        <h4>🔪 The Mafia Team:</h4>
+                        <p><strong>${mafiaNames}</strong></p>
+                        <p><em>Help them win without revealing yourself!</em></p>
+                    </div>
+                `;
+            }
+        }
+
+        // Show voting interface
+        const votingOptions = document.getElementById('voting-options');
+        if (votingOptions) {
+            // Double-check if current player is dead by looking at game state
+            const currentPlayer = gameState.players.find(p => p.id === this.playerId);
+            const isPlayerDead = isDead || (currentPlayer && !currentPlayer.alive);
+            
+            if (isPlayerDead) {
+                // Dead players get a clear message with no voting options
+                votingOptions.innerHTML = `
+                    <div class="dead-player-message">
+                        <h4>💀 You are dead</h4>
+                        <p>You cannot participate in voting. Watch the remaining players decide who to eliminate.</p>
+                    </div>
+                `;
+            } else {
+                const alivePlayers = gameState.players.filter(p => p.alive);
+                this.ui.showVotingInterface(alivePlayers, this.isHost, isPlayerDead);
+            }
+        }
     }
 
     handleGameEnd(gameState) {
@@ -621,15 +771,24 @@ class GameManager {
 
     // State persistence methods
     savePersistedState() {
-        const state = {
-            roomId: this.roomId,
-            playerId: this.playerId,
-            playerName: this.playerName,
-            playerRole: this.playerRole,
-            isHost: this.isHost,
-            gameSettings: this.gameSettings
-        };
-        localStorage.setItem('mafiaGameState', JSON.stringify(state));
+        // Only save player state if this is not a host
+        // Host status is managed separately via mafiaHostStatus
+        if (!this.isHost) {
+            const state = {
+                roomId: this.roomId,
+                playerId: this.playerId,
+                playerName: this.playerName,
+                playerRole: this.playerRole,
+                isDead: this.isDead,
+                gameSettings: this.gameSettings,
+                rolemates: this.rolemates,
+                mafiaMembers: this.mafiaMembers,
+                investigationResults: this.investigationResults,
+                gameState: this.gameState,
+                timestamp: Date.now()
+            };
+            localStorage.setItem('mafiaGameState', JSON.stringify(state));
+        }
     }
 
     loadPersistedState() {
@@ -638,34 +797,92 @@ class GameManager {
             if (savedState) {
                 const state = JSON.parse(savedState);
                 
+                // Check if state is not too old (24 hours)
+                const maxAge = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+                if (state.timestamp && (Date.now() - state.timestamp) > maxAge) {
+                    console.log('Saved state is too old, clearing it');
+                    this.clearPersistedState();
+                    return;
+                }
+                
                 // Only restore if we're in the same room
                 const urlParams = new URLSearchParams(window.location.search);
                 const currentRoomId = urlParams.get('room');
                 
                 if (state.roomId === currentRoomId) {
-                    this.playerId = state.playerId;
-                    this.playerName = state.playerName;
-                    this.playerRole = state.playerRole;
-                    this.isHost = state.isHost;
-                    if (state.gameSettings) {
-                        this.gameSettings = { ...this.gameSettings, ...state.gameSettings };
-                    }
-                    
-                    // Pre-fill name input if available
-                    const nameInput = document.getElementById('player-name-input');
-                    if (nameInput && this.playerName) {
-                        nameInput.value = this.playerName;
+                    // Only restore player state if this is NOT a host
+                    // Host status is determined separately by mafiaHostStatus
+                    if (!this.isHost) {
+                        this.playerId = state.playerId;
+                        this.playerName = state.playerName;
+                        this.playerRole = state.playerRole;
+                        this.isDead = state.isDead || false;
+                        this.rolemates = state.rolemates || [];
+                        this.mafiaMembers = state.mafiaMembers || [];
+                        this.investigationResults = state.investigationResults || [];
+                        this.gameState = state.gameState;
+                        
+                        if (state.gameSettings) {
+                            this.gameSettings = { ...this.gameSettings, ...state.gameSettings };
+                        }
+                        
+                        // Pre-fill name input if available
+                        const nameInput = document.getElementById('player-name-input');
+                        if (nameInput && this.playerName && !this.isHost) {
+                            nameInput.value = this.playerName;
+                        }
+                        
+                        console.log('Restored player state from localStorage');
                     }
                 }
             }
         } catch (error) {
             console.warn('Failed to load persisted state:', error);
+            this.clearPersistedState();
         }
+    }
+
+    showJoinControls() {
+        const joinBtn = document.getElementById('join-lobby-btn');
+        const nameInput = document.getElementById('player-name-input');
+        const lobbyControls = document.querySelector('.lobby-controls');
+        
+        if (joinBtn) joinBtn.style.display = 'inline-block';
+        if (nameInput) nameInput.style.display = 'inline-block';
+        if (lobbyControls && !this.isHost) lobbyControls.style.display = 'block';
+    }
+
+    hideJoinControls() {
+        const joinBtn = document.getElementById('join-lobby-btn');
+        const nameInput = document.getElementById('player-name-input');
+        const lobbyControls = document.querySelector('.lobby-controls');
+        
+        if (joinBtn) joinBtn.style.display = 'none';
+        if (nameInput) nameInput.style.display = 'none';
+        if (lobbyControls && !this.isHost) lobbyControls.style.display = 'none';
     }
 
     clearPersistedState() {
         localStorage.removeItem('mafiaGameState');
         localStorage.removeItem('mafiaHostStatus');
+    }
+
+    handleClearStorage() {
+        if (confirm('Are you sure you want to clear your saved game data? This will reset your browser and you\'ll need to rejoin the game.')) {
+            this.clearPersistedState();
+            // Reset all instance variables
+            this.playerId = null;
+            this.playerName = null;
+            this.playerRole = null;
+            this.isHost = false;
+            this.isDead = false;
+            this.rolemates = [];
+            this.mafiaMembers = [];
+            this.investigationResults = [];
+            this.gameState = null;
+            // Reload the page to reset everything
+            window.location.reload();
+        }
     }
 }
 

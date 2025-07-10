@@ -16,6 +16,10 @@ export class GameRoom {
     switch (url.pathname) {
       case '/websocket':
         return this.handleWebSocket(request);
+      case '/init':
+        return this.initRoom(request);
+      case '/check':
+        return this.checkRoom();
       case '/create':
         return this.createRoom();
       case '/join':
@@ -81,7 +85,7 @@ export class GameRoom {
         await this.handleHostConnect(sessionId, message.hostName);
         break;
       case 'join_game':
-        await this.handleJoinGame(sessionId, message.playerName);
+        await this.handleJoinGame(sessionId, message.playerName, message.existingPlayerId);
         break;
       case 'start_game':
         await this.handleStartGame(sessionId, message.gameSettings);
@@ -113,26 +117,35 @@ export class GameRoom {
     const gameState = await this.getGameState();
     const session = this.sessions.get(sessionId);
     
-    if (!session) return;
+    if (!session) {
+      console.log(`Host connect failed - no session found for ${sessionId}`);
+      return;
+    }
     
     // Set up host session (host is not a player)
     session.playerName = hostName;
     session.isHost = true;
     
-    // Set host ID if not already set
-    if (!gameState.hostId) {
+    // Set host ID if not already set, or update if host is reconnecting
+    // Also allow taking over as host if no current host session exists
+    const currentHostSession = gameState.hostId ? this.sessions.get(gameState.hostId) : null;
+    if (!gameState.hostId || gameState.hostId === sessionId || !currentHostSession) {
       gameState.hostId = sessionId; // Use session ID for host, not player ID
     }
+    
+    console.log(`Host connected with session ID: ${sessionId}`);
+    console.log(`Session isHost set to: ${session.isHost}`);
+    console.log(`GameState hostId set to: ${gameState.hostId}`);
     
     await this.saveGameState(gameState);
     await this.broadcastGameState();
   }
 
-  async handleJoinGame(sessionId, playerName) {
+  async handleJoinGame(sessionId, playerName, existingPlayerId = null) {
     const gameState = await this.getGameState();
+    const session = this.sessions.get(sessionId);
     
     if (gameState.phase !== 'lobby') {
-      const session = this.sessions.get(sessionId);
       session.webSocket.send(JSON.stringify({
         type: 'error',
         message: 'Game already in progress'
@@ -140,18 +153,68 @@ export class GameRoom {
       return;
     }
 
-    const playerId = crypto.randomUUID();
-    const session = this.sessions.get(sessionId);
-    session.playerId = playerId;
-    session.playerName = playerName;
+    // Check for unique name (unless reconnecting with existing player ID)
+    let existingPlayerByName = Array.from(gameState.players.values()).find(p => p.name === playerName);
+    
+    if (!existingPlayerId && existingPlayerByName) {
+      session.webSocket.send(JSON.stringify({
+        type: 'error',
+        message: 'A player with that name already exists. Please choose a different name.'
+      }));
+      return;
+    }
 
-    gameState.players.set(playerId, {
-      id: playerId,
-      name: playerName,
-      role: null,
-      alive: true,
-      sessionId: sessionId
-    });
+    let playerId;
+    let isReconnecting = false;
+
+    // Check if this is a reconnection with existing player ID
+    if (existingPlayerId && gameState.players.has(existingPlayerId)) {
+      const existingPlayer = gameState.players.get(existingPlayerId);
+      if (existingPlayer.name === playerName) {
+        // Valid reconnection with existing player ID
+        playerId = existingPlayerId;
+        isReconnecting = true;
+        
+        // Update session info
+        existingPlayer.sessionId = sessionId;
+        session.playerId = playerId;
+        session.playerName = playerName;
+        
+        console.log(`Player ${playerName} reconnected with ID ${playerId}`);
+      } else {
+        // Player ID exists but name doesn't match - treat as new player
+        existingPlayerId = null;
+      }
+    } else if (!existingPlayerId && existingPlayerByName) {
+      // No existing player ID provided, but player with same name exists
+      // This could be a reconnection attempt - allow it and update session
+      playerId = existingPlayerByName.id;
+      isReconnecting = true;
+      
+      // Update session info
+      existingPlayerByName.sessionId = sessionId;
+      session.playerId = playerId;
+      session.playerName = playerName;
+      
+      console.log(`Player ${playerName} reconnected by name with ID ${playerId}`);
+    }
+
+    // Create new player if not reconnecting
+    if (!isReconnecting) {
+      playerId = crypto.randomUUID();
+      session.playerId = playerId;
+      session.playerName = playerName;
+
+      gameState.players.set(playerId, {
+        id: playerId,
+        name: playerName,
+        role: null,
+        alive: true,
+        sessionId: sessionId
+      });
+      
+      console.log(`New player ${playerName} joined with ID ${playerId}`);
+    }
 
     await this.saveGameState(gameState);
     
@@ -159,7 +222,8 @@ export class GameRoom {
     session.webSocket.send(JSON.stringify({
       type: 'player_joined',
       playerId: playerId,
-      playerName: playerName
+      playerName: playerName,
+      isReconnecting: isReconnecting
     }));
     
     await this.broadcastGameState();
@@ -169,14 +233,31 @@ export class GameRoom {
     const gameState = await this.getGameState();
     const session = this.sessions.get(sessionId);
     
-    // Check if this session is the host
-    if (!session || (!session.isHost && sessionId !== gameState.hostId)) {
-      session.webSocket.send(JSON.stringify({
-        type: 'error',
-        message: 'Only the host can start the game'
-      }));
+    // Check if this session is authorized to start the game
+    const isMarkedAsHost = session && session.isHost === true;
+    const isHostSession = sessionId === gameState.hostId;
+    const currentHostSession = gameState.hostId ? this.sessions.get(gameState.hostId) : null;
+    const noActiveHost = !currentHostSession;
+    
+    console.log(`Start game request from session ${sessionId}`);
+    console.log(`Is marked as host: ${isMarkedAsHost}`);
+    console.log(`Is host session: ${isHostSession}`);
+    console.log(`No active host: ${noActiveHost}`);
+    
+    const isAuthorized = session && (isMarkedAsHost || isHostSession || noActiveHost);
+    
+    if (!isAuthorized) {
+      console.log('Start game denied - not authorized');
+      if (session) {
+        session.webSocket.send(JSON.stringify({
+          type: 'error',
+          message: 'Only the host can start the game'
+        }));
+      }
       return;
     }
+    
+    console.log('Start game authorized - proceeding');
 
     if (gameState.players.size < 2) {
       session.webSocket.send(JSON.stringify({
@@ -216,13 +297,36 @@ export class GameRoom {
     const session = this.sessions.get(sessionId);
     
     // Only host can kick players
-    if (!session || (!session.isHost && sessionId !== gameState.hostId)) {
-      session.webSocket.send(JSON.stringify({
-        type: 'error',
-        message: 'Only the host can kick players'
-      }));
+    console.log(`Kick request from session ${sessionId}`);
+    console.log(`Session exists: ${!!session}`);
+    console.log(`Session isHost: ${session?.isHost}`);
+    console.log(`GameState hostId: ${gameState.hostId}`);
+    console.log(`Session ID matches hostId: ${sessionId === gameState.hostId}`);
+    
+    // Check if this session is authorized to kick
+    const isMarkedAsHost = session && session.isHost === true;
+    const isHostSession = sessionId === gameState.hostId;
+    const currentHostSession = gameState.hostId ? this.sessions.get(gameState.hostId) : null;
+    const noActiveHost = !currentHostSession;
+    
+    console.log(`Is marked as host: ${isMarkedAsHost}`);
+    console.log(`Is host session: ${isHostSession}`);
+    console.log(`No active host: ${noActiveHost}`);
+    
+    const isAuthorized = session && (isMarkedAsHost || isHostSession || noActiveHost);
+    
+    if (!isAuthorized) {
+      console.log('Kick denied - not authorized');
+      if (session) {
+        session.webSocket.send(JSON.stringify({
+          type: 'error',
+          message: 'Only the host can kick players'
+        }));
+      }
       return;
     }
+    
+    console.log('Kick authorized - proceeding');
 
     // Can't kick during active game
     if (gameState.phase !== 'lobby') {
@@ -970,16 +1074,38 @@ export class GameRoom {
 
   async broadcastGameState() {
     const gameState = await this.getGameState();
-    const publicGameState = this.getPublicGameState(gameState);
     
     for (const [sessionId, session] of this.sessions) {
       if (session.webSocket) {
+        // Send full game state to host, public state to players
+        const stateToSend = session.isHost ? this.getHostGameState(gameState) : this.getPublicGameState(gameState);
+        
         session.webSocket.send(JSON.stringify({
           type: 'game_state_update',
-          gameState: publicGameState
+          gameState: stateToSend
         }));
       }
     }
+  }
+
+  getHostGameState(gameState) {
+    // Host sees all roles at all times
+    const hostPlayers = Array.from(gameState.players.values()).map(player => ({
+      id: player.id,
+      name: player.name,
+      alive: player.alive,
+      role: player.role // Host always sees all roles
+    }));
+
+    return {
+      roomId: gameState.roomId,
+      phase: gameState.phase,
+      day: gameState.day,
+      players: hostPlayers,
+      gameLog: gameState.gameLog,
+      winner: gameState.winner,
+      hostId: gameState.hostId
+    };
   }
 
   getPublicGameState(gameState) {
@@ -1091,6 +1217,52 @@ export class GameRoom {
     }), {
       headers: { 'Content-Type': 'application/json' }
     });
+  }
+
+  async initRoom(request) {
+    try {
+      const { hostName } = await request.json();
+      
+      if (!hostName || hostName.trim().length === 0) {
+        return new Response(JSON.stringify({ success: false, error: 'Host name is required' }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      // Initialize the game state with the host
+      const gameState = await this.getGameState();
+      
+      // Set up the host if not already set
+      if (!gameState.hostId) {
+        const hostId = crypto.randomUUID();
+        gameState.hostId = hostId;
+        gameState.hostName = hostName.trim();
+        await this.saveGameState(gameState);
+      }
+
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch (error) {
+      console.error('Error initializing room:', error);
+      return new Response(JSON.stringify({ success: false, error: 'Failed to initialize room' }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+  }
+
+  async checkRoom() {
+    try {
+      const gameState = await this.getGameState();
+      return new Response(JSON.stringify({ exists: true, phase: gameState.phase }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch (error) {
+      console.error('Error checking room:', error);
+      return new Response(JSON.stringify({ exists: false }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
   }
 
   startCleanupTimer() {
