@@ -11,6 +11,12 @@ export default defineConfig({
     cloudflareTest({
       main: "./src/server/index.ts",
       wrangler: { configPath: "./wrangler.jsonc" },
+      // Test-only: honors client-supplied `start_game.seed` so D4's scripted
+      // games get a deterministic role assignment. Never set in
+      // wrangler.jsonc itself (that file is also `wrangler deploy`'s
+      // config) — this override only applies inside the pool-workers
+      // Miniflare instance (Spec 03).
+      miniflare: { bindings: { ALLOW_TEST_SEED: "1" } },
     }),
   ],
   test: {

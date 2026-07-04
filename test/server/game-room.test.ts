@@ -6,10 +6,13 @@ import {
   evictDurableObject,
 } from "cloudflare:test";
 import { describe, expect, test } from "vitest";
+import type { Ruleset } from "../../src/engine";
 import type {
   ClientMessage,
+  ClientRoomState,
   ErrorMessage,
   PongMessage,
+  RejectionMessage,
   ServerMessage,
   SnapshotMessage,
   WelcomeMessage,
@@ -145,6 +148,146 @@ async function joinAsPlayer(
 
 async function stubFor(roomCode: string) {
   return env.GAME_ROOMS.get(env.GAME_ROOMS.idFromName(roomCode));
+}
+
+// ---------------------------------------------------------------------------
+// D4 — game helpers. House rules, untimed, 5 players: seed 19 deals
+// p1=angel, p2=villager, p3=detective, p4=villager, p5=mafia (join order
+// Alice/Bob/Carol/Dave/Erin) — verified directly against the engine before
+// being pinned here. `ALLOW_TEST_SEED` is set for this test project only
+// (vitest.workers.config.ts), so `seed` is honored.
+// ---------------------------------------------------------------------------
+
+const FIVE_PLAYER_HOUSE_RULES: Ruleset = {
+  roles: { mafia: 1, villager: 2, detective: 1, angel: 1, suicide_bomber: 0, minion: 0 },
+  mafiaCountFormula: "sqrt",
+  firstNightKill: true,
+  tiePolicy: "runoff-then-peace",
+  dayVoteThreshold: "plurality",
+  noMurderOption: true,
+  mafiaConsensus: "unanimous",
+  revealOnDeath: "full",
+  parityRule: "immediate",
+  votingVisibility: "hidden",
+  timers: {},
+  dawnDuskBeatMs: 3000,
+};
+
+const SCRIPTED_SEED = 19;
+
+interface FivePlayerGame {
+  roomCode: string;
+  hostWs: WebSocket;
+  hostKey: string;
+  // Join order: angel, villager, detective, villager, mafia.
+  angel: { ws: WebSocket; playerId: string; seatToken: string };
+  villager1: { ws: WebSocket; playerId: string; seatToken: string };
+  detective: { ws: WebSocket; playerId: string; seatToken: string };
+  villager2: { ws: WebSocket; playerId: string; seatToken: string };
+  mafia: { ws: WebSocket; playerId: string; seatToken: string };
+}
+
+async function setUpFivePlayerRoom(): Promise<FivePlayerGame> {
+  const { roomCode, hostKey } = await createRoom();
+  const hostWs = await openSocket(roomCode);
+  send(hostWs, { type: "hello", auth: { kind: "host", hostKey } });
+  await nextMessage(hostWs); // welcome
+
+  const names = ["Alice", "Bob", "Carol", "Dave", "Erin"] as const;
+  const joined: { ws: WebSocket; playerId: string; seatToken: string }[] = [];
+  for (const name of names) {
+    const { ws, welcome } = await joinAsPlayer(roomCode, name);
+    joined.push({
+      ws,
+      playerId: welcome.you.playerId!,
+      seatToken: welcome.you.seatToken!,
+    });
+    // The join broadcast reaches every already-connected socket (host and
+    // every previously joined player) — drain one snapshot from each so no
+    // queue is left holding a pre-start_game lobby snapshot.
+    await nextMessageOfType(hostWs, "snapshot");
+    for (const prior of joined.slice(0, -1)) {
+      await nextMessageOfType(prior.ws, "snapshot");
+    }
+  }
+
+  const [angel, villager1, detective, villager2, mafia] = joined as [
+    (typeof joined)[0],
+    (typeof joined)[0],
+    (typeof joined)[0],
+    (typeof joined)[0],
+    (typeof joined)[0],
+  ];
+
+  return { roomCode, hostWs, hostKey, angel, villager1, detective, villager2, mafia };
+}
+
+function sendGame(ws: WebSocket, msg: ClientMessage): void {
+  send(ws, msg);
+}
+
+async function startScriptedGame(
+  game: FivePlayerGame,
+): Promise<Record<"angel" | "villager1" | "detective" | "villager2" | "mafia", ClientRoomState>> {
+  sendGame(game.hostWs, {
+    type: "start_game",
+    ruleset: FIVE_PLAYER_HOUSE_RULES,
+    seed: SCRIPTED_SEED,
+  });
+  // Every connected socket, host included, gets a fresh snapshot once the
+  // game starts.
+  return drainSnapshots(game);
+}
+
+/** Every applied game command re-broadcasts a personalized snapshot to every
+ * connected socket, host included (apply-persist-broadcast, Spec 03). After
+ * sending a command, drain exactly one fresh snapshot per socket — always
+ * all six, unconditionally — so no queue is left holding a stale broadcast
+ * that a later `nextMessageOfType` call would return instead of the latest
+ * one. Returns each player's own composed state, keyed by role name. */
+async function drainSnapshots(
+  game: FivePlayerGame,
+): Promise<Record<"angel" | "villager1" | "detective" | "villager2" | "mafia", ClientRoomState>> {
+  const [angel, villager1, detective, villager2, mafia] = await Promise.all([
+    nextMessageOfType(game.angel.ws, "snapshot"),
+    nextMessageOfType(game.villager1.ws, "snapshot"),
+    nextMessageOfType(game.detective.ws, "snapshot"),
+    nextMessageOfType(game.villager2.ws, "snapshot"),
+    nextMessageOfType(game.mafia.ws, "snapshot"),
+  ]);
+  await nextMessageOfType(game.hostWs, "snapshot");
+  return {
+    angel: angel.state,
+    villager1: villager1.state,
+    detective: detective.state,
+    villager2: villager2.state,
+    mafia: mafia.state,
+  };
+}
+
+/** Advances a dawn/dusk announcement beat via the real unified alarm instead
+ * of a host force_advance — the spec-true path (dawn/dusk are "zero-input
+ * announcement states" that auto-advance once their `dawnDuskBeatMs` timer
+ * elapses; a completed night/vote is what arms that timer in the first
+ * place, per the fix in this round). Moves the stored deadline (both the
+ * DO's own `gameDeadlineAt` bookkeeping and the engine's own
+ * `GameState.deadlineAt`, which must move together — see the "short night
+ * timer" test) into the past, then forces the still-future real alarm to
+ * fire now via `runDurableObjectAlarm`, deterministically, without waiting
+ * out the real few-second beat. */
+async function advanceViaAlarm(
+  game: FivePlayerGame,
+): Promise<Record<"angel" | "villager1" | "detective" | "villager2" | "mafia", ClientRoomState>> {
+  const stub = await stubFor(game.roomCode);
+  await runInDurableObject(stub, async (_instance, state) => {
+    const past = Date.now() - 1;
+    await state.storage.put("gameDeadlineAt", past);
+    const g = await state.storage.get<{ deadlineAt: number }>("game");
+    await state.storage.put("game", { ...g, deadlineAt: past });
+  });
+  const ran = await runDurableObjectAlarm(stub);
+  expect(ran).toBe(true);
+  return drainSnapshots(game);
 }
 
 describe("claim protocol", () => {
@@ -531,5 +674,680 @@ describe("wake-recovery constructor guard", () => {
       const room = await state.storage.get("room");
       expect(room).toBeUndefined();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D4 — game (Spec 03)
+// ---------------------------------------------------------------------------
+
+describe("game lifecycle: start_game authority and validation", () => {
+  test("non-host start_game is rejected", async () => {
+    const game = await setUpFivePlayerRoom();
+    sendGame(game.angel.ws, {
+      type: "start_game",
+      ruleset: FIVE_PLAYER_HOUSE_RULES,
+      seed: SCRIPTED_SEED,
+    });
+    const rejection = (await nextMessageOfType(
+      game.angel.ws,
+      "rejection",
+    )) as RejectionMessage;
+    expect(rejection.code).toBe("not_host");
+  });
+
+  test("start_game with too few players is refused with invalid_ruleset", async () => {
+    const { roomCode, hostKey } = await createRoom();
+    const hostWs = await openSocket(roomCode);
+    send(hostWs, { type: "hello", auth: { kind: "host", hostKey } });
+    await nextMessage(hostWs);
+    await joinAsPlayer(roomCode, "Solo");
+    await nextMessageOfType(hostWs, "snapshot");
+
+    sendGame(hostWs, {
+      type: "start_game",
+      ruleset: FIVE_PLAYER_HOUSE_RULES,
+      seed: SCRIPTED_SEED,
+    });
+    const err = (await nextMessageOfType(hostWs, "error")) as ErrorMessage;
+    expect(err.code).toBe("invalid_ruleset");
+  });
+
+  test("start_game with an invalid ruleset (mafia required) is refused", async () => {
+    const game = await setUpFivePlayerRoom();
+    const badRuleset: Ruleset = {
+      ...FIVE_PLAYER_HOUSE_RULES,
+      roles: { villager: "auto" },
+    };
+    sendGame(game.hostWs, {
+      type: "start_game",
+      ruleset: badRuleset,
+      seed: SCRIPTED_SEED,
+    });
+    const err = (await nextMessageOfType(game.hostWs, "error")) as ErrorMessage;
+    expect(err.code).toBe("invalid_ruleset");
+  });
+
+  test("join is rejected once start_game applies; seat rejoin still works", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+
+    const lateJoin = await openSocket(game.roomCode);
+    send(lateJoin, { type: "hello", auth: { kind: "join", name: "Latecomer" } });
+    const err = (await nextMessage(lateJoin)) as ErrorMessage;
+    expect(err.code).toBe("game_in_progress");
+    lateJoin.close();
+
+    const rejoin = await openSocket(game.roomCode);
+    send(rejoin, { type: "hello", auth: { kind: "seat", seatToken: game.angel.seatToken } });
+    const welcome = (await nextMessage(rejoin)) as WelcomeMessage;
+    expect(welcome.you.playerId).toBe(game.angel.playerId);
+    expect(welcome.state.game?.you?.roleId).toBe("angel");
+    rejoin.close();
+  });
+});
+
+describe("full scripted game over real WebSockets", () => {
+  test("night kill, angel save, detective result, day vote, village win", async () => {
+    const game = await setUpFivePlayerRoom();
+    const afterStart = await startScriptedGame(game);
+
+    // The snapshot after start_game carries the composed game view — spot
+    // check the detective's own role is visible only to them.
+    expect(afterStart.detective.phase).toBe("night");
+    expect(afterStart.detective.game?.you?.roleId).toBe("detective");
+
+    // Night 1: mafia (Erin) kills Dave (villager2), angel (Alice) protects
+    // Bob (villager1) — protection doesn't cover Dave, so the kill lands.
+    // Detective (Carol) investigates the mafia (Erin) -> isMafia true, and
+    // that result must appear only in the detective's own snapshot.
+    sendGame(game.mafia.ws, { type: "submit_action", action: { targetId: game.villager2.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.angel.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    const afterNight1 = await drainSnapshots(game);
+
+    expect(afterNight1.detective.phase).toBe("dawn");
+    expect(afterNight1.detective.game?.you?.investigationResults).toEqual([
+      { day: 1, targetId: game.mafia.playerId, isMafia: true },
+    ]);
+    // Nobody else's snapshot carries the detective's private investigation
+    // result.
+    for (const key of ["angel", "villager1", "mafia"] as const) {
+      expect(afterNight1[key].game?.you?.investigationResults).toBeUndefined();
+    }
+    // Dave (villager2) died; his own next snapshot shows him dead.
+    expect(afterNight1.villager1.game?.players.find((p) => p.id === game.villager2.playerId)?.alive).toBe(false);
+    // The last night action (a player's, not the host's) armed the dawn
+    // beat's deadline — the regression this round fixed: a player-triggered
+    // completion used to strand the game with deadlineAt: null.
+    expect(afterNight1.detective.game?.deadlineAt).not.toBeNull();
+
+    // Dawn -> day via the real unified alarm (spec-true: dawn is a
+    // zero-input announcement beat that auto-advances, no host action).
+    const afterDawn = await advanceViaAlarm(game);
+    expect(afterDawn.detective.phase).toBe("day");
+
+    // Day 1: everybody votes no_murder to survive to a second night (so the
+    // angel's night-2 save is the one under test, per the spec's script).
+    let afterDayVote = afterDawn;
+    for (const p of [game.angel, game.villager1, game.detective, game.mafia] as const) {
+      sendGame(p.ws, { type: "cast_vote", target: "no_murder" });
+      afterDayVote = await drainSnapshots(game);
+    }
+    expect(afterDayVote.detective.phase).toBe("dusk");
+    // The last vote (a player's) armed the dusk beat's deadline too.
+    expect(afterDayVote.detective.game?.deadlineAt).not.toBeNull();
+
+    // Dusk -> night 2, also via the real alarm (same zero-input beat).
+    const afterDusk = await advanceViaAlarm(game);
+    expect(afterDusk.detective.phase).toBe("night");
+    expect(afterDusk.detective.game?.day).toBe(2);
+
+    // Night 2: mafia targets Bob (villager1); angel protects Bob this time
+    // -> the attack fails and Bob survives (the scripted "angel save").
+    sendGame(game.mafia.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.angel.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    const afterNight2 = await drainSnapshots(game);
+
+    expect(afterNight2.detective.phase).toBe("dawn");
+    expect(afterNight2.villager1.game?.players.find((p) => p.id === game.villager1.playerId)?.alive).toBe(true);
+    expect(
+      afterNight2.detective.game?.log.some(
+        (e) => e.type === "attackAttempted" && e.outcome === "failed" && e.targetId === game.villager1.playerId,
+      ),
+    ).toBe(true);
+
+    // Host-impatience path: dawn's beat deadline is correctly armed here
+    // too (night 2's last action was player-triggered, same fix), but the
+    // host doesn't have to wait for it — force_advance is still a valid
+    // shortcut past an armed deadline, not just a recovery for a stranded
+    // one. Deliberately exercised once here; every other beat above uses
+    // the real alarm to prove the auto-advance path works unattended.
+    sendGame(game.hostWs, { type: "force_advance", gen: afterNight2.detective.game!.phaseGen });
+    const afterDawn2 = await drainSnapshots(game);
+    expect(afterDawn2.detective.phase).toBe("day");
+
+    // Day 2: everyone votes to eliminate the mafia -> village wins the
+    // instant mafia count hits zero (evaluated inside vote resolution).
+    let final = afterDawn2;
+    for (const p of [game.angel, game.villager1, game.detective, game.mafia] as const) {
+      sendGame(p.ws, { type: "cast_vote", target: game.mafia.playerId });
+      final = await drainSnapshots(game);
+    }
+    expect(final.detective.phase).toBe("ended");
+    expect(final.detective.game?.winners).toEqual(["village"]);
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+});
+
+describe("mid-game hibernation and rejoin", () => {
+  test("eviction mid-night survives — sockets and pending actions intact", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+
+    sendGame(game.mafia.ws, { type: "submit_action", action: { targetId: game.villager2.playerId } });
+    await drainSnapshots(game);
+
+    const stub = await stubFor(game.roomCode);
+    await evictDurableObject(stub);
+
+    // Sockets survive the eviction; a fresh command applies against the
+    // reconstructed DO with roles/pending actions intact.
+    sendGame(game.angel.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    const afterNight1 = await drainSnapshots(game);
+
+    expect(afterNight1.detective.phase).toBe("dawn");
+    expect(afterNight1.detective.game?.you?.roleId).toBe("detective");
+    expect(afterNight1.detective.game?.you?.investigationResults).toEqual([
+      { day: 1, targetId: game.mafia.playerId, isMafia: true },
+    ]);
+    // The mafia kill submitted before eviction still resolved.
+    expect(afterNight1.angel.game?.players.find((p) => p.id === game.villager2.playerId)?.alive).toBe(false);
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("mid-night rejoin: closed socket, fresh hello with seat token welcomes with role + pending action", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+
+    sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    await drainSnapshots(game);
+
+    game.detective.ws.close();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const rejoinWs = await openSocket(game.roomCode);
+    send(rejoinWs, { type: "hello", auth: { kind: "seat", seatToken: game.detective.seatToken } });
+    const welcome = (await nextMessage(rejoinWs)) as WelcomeMessage;
+
+    expect(welcome.you.playerId).toBe(game.detective.playerId);
+    expect(welcome.state.phase).toBe("night");
+    expect(welcome.state.game?.you?.roleId).toBe("detective");
+    expect(welcome.state.game?.you?.pendingAction).toEqual({
+      actionType: "investigate",
+      targetId: game.mafia.playerId,
+    });
+
+    rejoinWs.close();
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+});
+
+describe("timer path and stale-alarm no-op", () => {
+  test("a player's own action completing the night arms the dawn beat's alarm, no force_advance needed", async () => {
+    // Regression (fix round 1): applyCommand's submitAction/castVote/
+    // retractVote/markAbsent/markPresent branches called advanceIfComplete
+    // with no `now`, so a player's own last action completing a phase never
+    // armed the next beat's deadline — only host-issued forceAdvance/
+    // timerExpired carried `now`. That stranded every untimed house-rules
+    // game in dawn/dusk forever, since nothing ever calls force_advance in
+    // ordinary play. Fixed by threading `now` through every command
+    // variant; this test proves the DO-level, real-alarm, no-force_advance
+    // path end to end.
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+
+    sendGame(game.mafia.ws, { type: "submit_action", action: { targetId: game.villager2.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.angel.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
+    await drainSnapshots(game);
+    // The detective's action is the last pending night input — a player,
+    // not the host, triggers the night -> dawn transition.
+    sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    const afterNight1 = await drainSnapshots(game);
+    expect(afterNight1.detective.phase).toBe("dawn");
+
+    const stub = await stubFor(game.roomCode);
+    const armed = await runInDurableObject(stub, async (_instance, state) => {
+      return state.storage.get<number>("gameDeadlineAt");
+    });
+    expect(armed).toBeTypeOf("number");
+
+    // The real alarm, fired with no force_advance anywhere in this test,
+    // advances dawn -> day on its own.
+    const afterDawn = await advanceViaAlarm(game);
+    expect(afterDawn.detective.phase).toBe("day");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("short night timer expires via the unified alarm and defaults apply", async () => {
+    const game = await setUpFivePlayerRoom();
+    const timedRuleset: Ruleset = { ...FIVE_PLAYER_HOUSE_RULES, timers: { night: 5 } };
+    sendGame(game.hostWs, { type: "start_game", ruleset: timedRuleset, seed: SCRIPTED_SEED });
+    const afterStart = await drainSnapshots(game);
+    expect(afterStart.detective.game?.deadlineAt).not.toBeNull();
+
+    // Rewrite the stored deadline into the past — both the DO's own
+    // bookkeeping key (`gameDeadlineAt`, what the alarm's due-check reads)
+    // and the engine's own copy inside `GameState.deadlineAt` (what
+    // `applyCommand`'s `timerExpired` validates `at` against, Spec 02 v2.1)
+    // must move together, exactly as `applyEffects`' `setDeadline` handler
+    // keeps them in lockstep during normal play — otherwise the engine
+    // treats the alarm as stale and no-ops. Leave Miniflare's actually-armed
+    // alarm at its real (few-seconds-out) wall-clock time so there's no race
+    // with the platform's own background alarm fire (which an
+    // already-elapsed `setAlarm` would trigger nondeterministically) —
+    // `runDurableObjectAlarm` forces that still-future alarm to run now,
+    // exactly like the pre-existing auth-reap test does for
+    // `pendingAuth.connectedAt`.
+    const stub = await stubFor(game.roomCode);
+    await runInDurableObject(stub, async (_instance, state) => {
+      const at = await state.storage.get<number>("gameDeadlineAt");
+      expect(at).toBeTypeOf("number");
+      const past = Date.now() - 1;
+      await state.storage.put("gameDeadlineAt", past);
+      const g = await state.storage.get<{ deadlineAt: number }>("game");
+      await state.storage.put("game", { ...g, deadlineAt: past });
+    });
+
+    const ran = await runDurableObjectAlarm(stub);
+    expect(ran).toBe(true);
+
+    const afterTimeout = await drainSnapshots(game);
+    // Nobody submitted a night action — defaults apply (no deaths, mafia
+    // vote unresolved) and the phase still advances to dawn.
+    expect(afterTimeout.detective.phase).toBe("dawn");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("stale alarm after a force-advance is a harmless no-op", async () => {
+    const game = await setUpFivePlayerRoom();
+    const timedRuleset: Ruleset = { ...FIVE_PLAYER_HOUSE_RULES, timers: { night: 5 } };
+    sendGame(game.hostWs, { type: "start_game", ruleset: timedRuleset, seed: SCRIPTED_SEED });
+    const afterStart = await drainSnapshots(game);
+    const staleDeadlineAt = afterStart.detective.game!.deadlineAt!;
+    const genAtStart = afterStart.detective.game!.phaseGen;
+
+    // Host force-advances first, consuming the deadline the engine had
+    // armed (dawn gets its own fresh dawn-beat deadline under house rules) —
+    // gameDeadlineAt and the engine's own state.deadlineAt move together,
+    // atomically, exactly as applyEffects keeps them in lockstep.
+    sendGame(game.hostWs, { type: "force_advance", gen: genAtStart });
+    const afterForce = await drainSnapshots(game);
+    expect(afterForce.detective.phase).toBe("dawn");
+    const dawnDeadlineAt = afterForce.detective.game!.deadlineAt!;
+    expect(dawnDeadlineAt).not.toBe(staleDeadlineAt);
+
+    // Simulate the night-1 alarm's callback finally running late (Cloudflare
+    // alarms carry no payload — everything is reconstructed fresh from
+    // storage at fire time, Spec 03's pinned model) after force_advance
+    // already rearmed for the newer dawn-beat deadline. The due-check reads
+    // gameDeadlineAt fresh and finds the CURRENT (dawn) deadline hasn't
+    // elapsed yet -> not due -> skip, re-arm for it unchanged. This is the
+    // DO-layer half of the "harmless at both layers" guarantee: a duplicate
+    // or delayed alarm fire never applies a command for a deadline that
+    // isn't the one currently due.
+    const stub = await stubFor(game.roomCode);
+    const ran = await runDurableObjectAlarm(stub);
+    expect(ran).toBe(true);
+
+    const afterSpuriousFire = await runInDurableObject(stub, async (_instance, state) => {
+      const current = await state.storage.get<number>("gameDeadlineAt");
+      const g = await state.storage.get<{ phase: string }>("game");
+      return { current, phase: g?.phase };
+    });
+    expect(afterSpuriousFire.current).toBe(dawnDeadlineAt);
+    expect(afterSpuriousFire.phase).toBe("dawn");
+
+    // No broadcast fired from the spurious fire — confirm by sending a ping
+    // and observing only a pong arrives, nothing queued ahead of it.
+    sendGame(game.hostWs, { type: "ping" });
+    const pong = (await nextMessageOfType(game.hostWs, "pong")) as PongMessage;
+    expect(pong.type).toBe("pong");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+});
+
+describe("authority: host-only game commands", () => {
+  test("non-host force_advance, mark_absent are rejected; host-spoofed payload ignored", async () => {
+    const game = await setUpFivePlayerRoom();
+    const afterStart = await startScriptedGame(game);
+
+    sendGame(game.angel.ws, { type: "force_advance", gen: afterStart.angel.game!.phaseGen });
+    const rejection1 = (await nextMessageOfType(game.angel.ws, "rejection")) as RejectionMessage;
+    expect(rejection1.code).toBe("not_host");
+
+    sendGame(game.angel.ws, { type: "mark_absent", playerId: game.villager1.playerId });
+    const rejection2 = (await nextMessageOfType(game.angel.ws, "rejection")) as RejectionMessage;
+    expect(rejection2.code).toBe("not_host");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("mark_absent/mark_present flip presence and broadcast", async () => {
+    const game = await setUpFivePlayerRoom();
+    const afterStart = await startScriptedGame(game);
+    void afterStart;
+
+    sendGame(game.hostWs, { type: "mark_absent", playerId: game.villager1.playerId });
+    const afterAbsent = await drainSnapshots(game);
+    expect(afterAbsent.detective.game?.players.find((p) => p.id === game.villager1.playerId)?.absent).toBe(true);
+
+    sendGame(game.hostWs, { type: "mark_present", playerId: game.villager1.playerId });
+    const afterPresent = await drainSnapshots(game);
+    expect(afterPresent.detective.game?.players.find((p) => p.id === game.villager1.playerId)?.absent).toBe(false);
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+});
+
+describe("lifecycle: new_game", () => {
+  test("new_game is refused mid-game", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+
+    sendGame(game.hostWs, { type: "new_game" });
+    const rejection = (await nextMessageOfType(
+      game.hostWs,
+      "rejection",
+    )) as RejectionMessage;
+    expect(rejection.code).toBe("not_ended");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("new_game accepted once ended; seats retained; lobby joins work after", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+
+    // Fast-forward to a village win via forceAdvance defaults: force through
+    // night 1 (no actions submitted -> nobody dies), day 1 vote to eliminate
+    // the mafia directly.
+    sendGame(game.hostWs, { type: "force_advance", gen: 0 });
+    const afterNight1 = await drainSnapshots(game);
+    expect(afterNight1.detective.phase).toBe("dawn");
+
+    sendGame(game.hostWs, { type: "force_advance", gen: afterNight1.detective.game!.phaseGen });
+    const afterDawn = await drainSnapshots(game);
+    expect(afterDawn.detective.phase).toBe("day");
+
+    let final = afterDawn;
+    for (const p of [game.angel, game.villager1, game.detective, game.villager2, game.mafia] as const) {
+      sendGame(p.ws, { type: "cast_vote", target: game.mafia.playerId });
+      final = await drainSnapshots(game);
+    }
+    expect(final.detective.phase).toBe("ended");
+
+    sendGame(game.hostWs, { type: "new_game" });
+    const afterNewGame = await drainSnapshots(game);
+    expect(afterNewGame.detective.phase).toBe("lobby");
+    expect(afterNewGame.detective.game).toBeNull();
+    expect(afterNewGame.detective.players).toHaveLength(5);
+
+    const lateJoin = await openSocket(game.roomCode);
+    send(lateJoin, { type: "hello", auth: { kind: "join", name: "Newcomer" } });
+    const welcome = (await nextMessage(lateJoin)) as WelcomeMessage;
+    expect(welcome.state.phase).toBe("lobby");
+    lateJoin.close();
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+});
+
+describe("kick refused mid-game", () => {
+  test("host kick during an active game is refused", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+
+    sendGame(game.hostWs, { type: "kick", playerId: game.angel.playerId });
+    const err = (await nextMessageOfType(game.hostWs, "error")) as ErrorMessage;
+    expect(err.code).toBe("not_lobby");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+});
+
+describe("projection privacy sweep", () => {
+  test("no living villager's frame ever reveals another living player's role", async () => {
+    const game = await setUpFivePlayerRoom();
+    const frames: ClientRoomState[] = [];
+
+    const afterStart = await startScriptedGame(game);
+    frames.push(afterStart.villager1);
+
+    sendGame(game.mafia.ws, { type: "submit_action", action: { targetId: game.villager2.playerId } });
+    frames.push((await drainSnapshots(game)).villager1);
+    sendGame(game.angel.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
+    frames.push((await drainSnapshots(game)).villager1);
+    sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    frames.push((await drainSnapshots(game)).villager1);
+
+    sendGame(game.hostWs, { type: "force_advance", gen: frames.at(-1)!.game!.phaseGen });
+    frames.push((await drainSnapshots(game)).villager1);
+
+    // Bob (villager1) is alive the whole time — his frames must never show
+    // a roleId/alignment for any other living player (Alice/angel, Carol/
+    // detective, Erin/mafia). Dave (villager2) died this night, so full
+    // reveal-on-death is expected for him only.
+    const livingOthers = [game.angel.playerId, game.detective.playerId, game.mafia.playerId];
+    for (const frame of frames) {
+      for (const p of frame.game?.players ?? []) {
+        if (livingOthers.includes(p.id) && p.alive) {
+          expect(p.roleId).toBeUndefined();
+          expect(p.alignment).toBeUndefined();
+        }
+      }
+    }
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("host's frame sees every role at all times", async () => {
+    const game = await setUpFivePlayerRoom();
+    const afterStart = await startScriptedGame(game);
+    void afterStart;
+
+    sendGame(game.hostWs, { type: "ping" });
+    await nextMessageOfType(game.hostWs, "pong");
+
+    const hostState = await new Promise<ClientRoomState>((resolve) => {
+      // Force a fresh broadcast to inspect the host's own composed view.
+      sendGame(game.mafia.ws, { type: "submit_action", action: { targetId: game.villager2.playerId } });
+      nextMessageOfType(game.hostWs, "snapshot").then((msg) => resolve(msg.state));
+    });
+    // Drain the player sockets' matching broadcast so queues don't leak
+    // into later assertions in this (single-test) suite.
+    await Promise.all([
+      nextMessageOfType(game.angel.ws, "snapshot"),
+      nextMessageOfType(game.villager1.ws, "snapshot"),
+      nextMessageOfType(game.detective.ws, "snapshot"),
+      nextMessageOfType(game.villager2.ws, "snapshot"),
+      nextMessageOfType(game.mafia.ws, "snapshot"),
+    ]);
+
+    expect(hostState.game?.players.every((p) => p.roleId !== undefined)).toBe(true);
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+});
+
+describe("player order is join order, always", () => {
+  test("room and game player arrays never reorder across the whole game", async () => {
+    const game = await setUpFivePlayerRoom();
+    const expectedOrder = [
+      game.angel.playerId,
+      game.villager1.playerId,
+      game.detective.playerId,
+      game.villager2.playerId,
+      game.mafia.playerId,
+    ];
+
+    const afterStart = await startScriptedGame(game);
+    expect(afterStart.detective.players.map((p) => p.id)).toEqual(expectedOrder);
+    expect(afterStart.detective.game?.players.map((p) => p.id)).toEqual(expectedOrder);
+
+    // Kill Dave (villager2) via a night action and re-check post-death: the
+    // dead player must stay in the same position, never moved to the back.
+    sendGame(game.mafia.ws, { type: "submit_action", action: { targetId: game.villager2.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.angel.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    const afterNight1 = await drainSnapshots(game);
+
+    expect(afterNight1.detective.players.map((p) => p.id)).toEqual(expectedOrder);
+    expect(afterNight1.detective.game?.players.map((p) => p.id)).toEqual(expectedOrder);
+    expect(afterNight1.detective.game?.players.find((p) => p.id === game.villager2.playerId)?.alive).toBe(false);
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+});
+
+describe("wake recovery: gameDeadlineAt", () => {
+  test("crash-window guard re-arms the alarm from a persisted gameDeadlineAt", async () => {
+    const game = await setUpFivePlayerRoom();
+    const timedRuleset: Ruleset = { ...FIVE_PLAYER_HOUSE_RULES, timers: { night: 5 } };
+    sendGame(game.hostWs, { type: "start_game", ruleset: timedRuleset, seed: SCRIPTED_SEED });
+    const afterStart = await drainSnapshots(game);
+    expect(afterStart.detective.game?.deadlineAt).not.toBeNull();
+
+    const stub = await stubFor(game.roomCode);
+    // Simulate the crash window: the deadline is persisted but the alarm
+    // itself got deleted out-of-band (as if the process died between the
+    // storage put and the setAlarm call).
+    await runInDurableObject(stub, async (_instance, state) => {
+      const at = await state.storage.get<number>("gameDeadlineAt");
+      expect(at).toBeTypeOf("number");
+      await state.storage.deleteAlarm();
+      expect(await state.storage.getAlarm()).toBeNull();
+    });
+
+    await evictDurableObject(stub);
+
+    // Any access reconstructs the DO, running the constructor guard, which
+    // re-arms from the still-persisted gameDeadlineAt.
+    await runInDurableObject(stub, async (_instance, state) => {
+      const alarmTime = await state.storage.getAlarm();
+      expect(alarmTime).not.toBeNull();
+    });
+
+    // Move the deadline into the past so the alarm's due-check treats it as
+    // elapsed without waiting out the real night timer — both the DO's own
+    // bookkeeping key and the engine's own state.deadlineAt move together
+    // (they're always kept in lockstep by applyEffects during normal play;
+    // see the "short night timer" test above for why touching only one
+    // desyncs the due-check from what applyCommand validates `at` against).
+    // Miniflare's own armed-alarm wall-clock time is left as whatever the
+    // constructor guard re-armed — still a few seconds out — so
+    // runDurableObjectAlarm forcing it early doesn't race a background fire.
+    await runInDurableObject(stub, async (_instance, state) => {
+      const past = Date.now() - 1;
+      await state.storage.put("gameDeadlineAt", past);
+      const g = await state.storage.get<{ deadlineAt: number }>("game");
+      await state.storage.put("game", { ...g, deadlineAt: past });
+    });
+    const ran = await runDurableObjectAlarm(stub);
+    expect(ran).toBe(true);
+
+    const afterTimeout = await drainSnapshots(game);
+    expect(afterTimeout.detective.phase).toBe("dawn");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
   });
 });

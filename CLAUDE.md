@@ -8,8 +8,8 @@ before doing anything. The process is `docs/ORCHESTRATION-PLAYBOOK.md`.
 | Role | Who |
 |---|---|
 | Architecture, specs, plans, docs | Orchestrator (lead Claude session) |
-| Adversarial spec review | Codex (different model, fresh eyes) |
-| Writing all application code (`src/`, `test/`) | Codex — **no network in its sandbox**: orchestrator runs installs/tests/live steps |
+| Adversarial spec review | A different set of eyes than the spec author (Codex runtime or a fresh subagent) |
+| Writing all application code (`src/`, `test/`) | Implementer agents (Codex runtime or Claude subagents) — **never the orchestrator**. Assume no network: orchestrator runs installs/live steps |
 | Research (web, docs, live probes) | Claude subagents |
 | Live steps: installs, wrangler dev/deploy, verification, commits | Orchestrator only |
 

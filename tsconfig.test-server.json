@@ -10,5 +10,5 @@
     ],
     "noEmit": true
   },
-  "include": ["test/server", "src/server", "src/shared", "worker-configuration.d.ts"]
+  "include": ["test/server", "src/server", "src/engine", "src/shared", "worker-configuration.d.ts"]
 }

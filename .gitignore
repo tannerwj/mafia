@@ -153,3 +153,6 @@ worker-configuration.d.ts
 
 .claude/settings.local.json
 .claude/worktrees/
+
+# wrangler dev-only vars (never deployed)
+.dev.vars

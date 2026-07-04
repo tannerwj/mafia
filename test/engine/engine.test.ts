@@ -310,6 +310,42 @@ describe("engine core", () => {
     expect(duskAdvance.effects).toContainEqual({ type: "setDeadline", at: NOW + 20 + 4242 });
   });
 
+  test("player-triggered phase completions (no forceAdvance) still arm the next beat's deadline", () => {
+    // Regression: submitAction/castVote completing a phase used to call
+    // advanceIfComplete with no `now`, so a player's own last action into
+    // dawn/dusk silently stranded the game with deadlineAt: null and no
+    // alarm ever armed. Only host-issued forceAdvance carried `now`.
+    const r = rules({ mafia: 1, detective: 1, villager: 2 }, { dawnDuskBeatMs: 4242 });
+    let s = start(4, r, 5);
+    const mafia = byRole(s, "mafia");
+    const detective = byRole(s, "detective");
+    const villagers = s.players.filter((p) => p.roleId === "villager");
+    expect(s.phase).toBe("night");
+
+    // Last night action submitted by a player (not the host) completes the
+    // night and transitions into dawn.
+    s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: villagers[0]!.id, now: NOW + 10 }).state;
+    const detectiveResult = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: mafia.id, now: NOW + 10 });
+    s = detectiveResult.state;
+    expect(s.phase).toBe("dawn");
+    expect(s.deadlineAt).toBe(NOW + 10 + 4242);
+    expect(detectiveResult.effects).toContainEqual({ type: "setDeadline", at: NOW + 10 + 4242 });
+
+    s = force(s); // dawn -> day (untimed by default in these tests)
+
+    // Last day vote cast by a player completes the vote and transitions
+    // into dusk.
+    const alive = living(s);
+    let voteResult = applyCommand(s, { type: "castVote", playerId: alive[0]!.id, target: "no_murder", now: NOW + 20 });
+    for (const p of alive.slice(1)) {
+      voteResult = applyCommand(voteResult.state, { type: "castVote", playerId: p.id, target: "no_murder", now: NOW + 20 });
+    }
+    s = voteResult.state;
+    expect(s.phase).toBe("dusk");
+    expect(s.deadlineAt).toBe(NOW + 20 + 4242);
+    expect(voteResult.effects).toContainEqual({ type: "setDeadline", at: NOW + 20 + 4242 });
+  });
+
   test("projection: living player's night view has no pending-count field, and player order is join order throughout a scripted game", () => {
     let s = start(5, rules({ mafia: 1, detective: 1, angel: 1, villager: 2 }), 9);
     const joinOrder = players(5).map((p) => p.id);

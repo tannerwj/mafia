@@ -166,3 +166,38 @@
 - The v0 core complaints (tab-switch death, multi-tab impossible, host
   takeover hole) are now all demonstrably fixed at the foundation layer.
 - In flight: spec02-fix (engine fix round in scratchpad worktree).
+
+## 2026-07-04 — SPEC 02 SHIPPED (2d5aa11); Spec 03 building
+- Postscript on the "orphan": spec01-build was alive all along — finished,
+  report lost/delayed, answered the watchdog ping an hour later. The refire
+  was safe because the resume brief mandated inventory-first: spec01-resume
+  validated instead of rewrote, added the wake-recovery guard + fixed a
+  broadcast-includes-sender race, a test-harness message-loss race, and the
+  setOffline E2E gap. Lesson folded into CLAUDE.md rules already.
+- spec02-fix (3rd lost report — artifacts told the story): all four fixes
+  landed + found a real gate bug (firstNightKill=false never gated the
+  mafia consensus path). Engine merged onto master, ALL gates green
+  (typecheck, engine 23/23, DO 16/16, build, E2E 6/6, purity greps).
+- Known v1.1 limitation (logged, not blocking): applyCommand falls back to
+  the default role registry after DO restart — custom-role games need
+  registry re-injection when role packs ship.
+- spec03-build launched (main checkout, baseline 2d5aa11): DO ⇄ engine
+  integration per Spec 03 v2.2. After it: 04 (player UI) → 05 (host
+  console) → 06 (ruleset editor), then the live full-game demo.
+
+## 2026-07-04 — Spec 03 built; live gate caught a stranding bug; fix round 1
+- spec03-build delivered: 34 DO tests (18 new), .dev.vars for ALLOW_TEST_SEED
+  (better than the spec's wrangler.jsonc pin — production compiles to empty
+  vars, verified), stale-alarm no-op skips persist+broadcast, RoomMeta.phase
+  mirrors engine phase. CI gates ALL GREEN on orchestrator re-run.
+- LIVE GATE (raw-WS scripted seed-19 game vs real dev server) caught what
+  CI could not: **dawn strands forever** — player-triggered phase
+  transitions (last night action, completed vote) pass no `now` to the
+  engine, so dawn/dusk beats never arm their setDeadline; D4 tests masked
+  it by force-advancing through dawn. Live-gate partial passes before the
+  strand: mid-night socket kill + seat-token resume with role intact,
+  private investigation delivery, seed-19 role map.
+- Fix round 1 sent to spec03-build (thread resumed): now? on all Commands,
+  threaded through machine.ts transitions, Date.now() on all DO builders,
+  regression tests incl. alarm-driven dawn→day without force_advance.
+  Watchdog armed. Dev server left running on :5174 for re-verification.

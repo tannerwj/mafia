@@ -68,13 +68,13 @@ export interface GameState {
 }
 
 export type Command =
-  | { type: "submitAction"; playerId: PlayerId; actionType?: NightActionType; targetId: PlayerId | null }
-  | { type: "castVote"; playerId: PlayerId; target: VoteTarget }
-  | { type: "retractVote"; playerId: PlayerId }
+  | { type: "submitAction"; playerId: PlayerId; actionType?: NightActionType; targetId: PlayerId | null; now?: number }
+  | { type: "castVote"; playerId: PlayerId; target: VoteTarget; now?: number }
+  | { type: "retractVote"; playerId: PlayerId; now?: number }
   | { type: "forceAdvance"; byHost?: boolean; gen: number; now?: number }
   | { type: "timerExpired"; at: number; now?: number }
-  | { type: "markAbsent"; byHost?: boolean; playerId: PlayerId }
-  | { type: "markPresent"; byHost?: boolean; playerId: PlayerId };
+  | { type: "markAbsent"; byHost?: boolean; playerId: PlayerId; now?: number }
+  | { type: "markPresent"; byHost?: boolean; playerId: PlayerId; now?: number };
 
 export type Effect =
   | { type: "setDeadline"; at: number }

@@ -11,6 +11,17 @@ import {
   CLOSE_BAD_CREDENTIAL,
   CLOSE_KICKED,
 } from "../shared/protocol";
+import {
+  applyCommand,
+  projectFor,
+  startGame,
+  validateRuleset,
+  type Command,
+  type Effect,
+  type GameState,
+  type LobbyPlayer,
+  type Ruleset,
+} from "../engine";
 
 // ---------------------------------------------------------------------------
 // Storage schema (Spec 01). No in-memory session state anywhere — everything
@@ -53,6 +64,8 @@ type Attachment =
 const ROOM_KEY = "room";
 const PLAYERS_KEY = "players";
 const PENDING_AUTH_KEY = "pendingAuth";
+const GAME_KEY = "game";
+const GAME_DEADLINE_KEY = "gameDeadlineAt";
 
 const AUTH_REAP_MS = 30_000;
 const EMPTY_LOBBY_TTL_MS = 60 * 60 * 1000; // 1h
@@ -223,33 +236,77 @@ export class GameRoom extends DurableObject<Env> {
       return;
     }
 
+    if (parsed.type !== "hello" && attachment.kind === "pending") {
+      this.sendError(ws, "not_authenticated", "Send hello first.");
+      ws.close(CLOSE_AUTH_TIMEOUT);
+      return;
+    }
+
     switch (parsed.type) {
       case "hello":
         await this.handleHello(ws, attachment, parsed);
         return;
       case "ping":
-        if (attachment.kind === "pending") {
-          this.sendError(ws, "not_authenticated", "Send hello first.");
-          ws.close(CLOSE_AUTH_TIMEOUT);
-          return;
-        }
         this.send(ws, { type: "pong" });
         return;
       case "kick":
-        if (attachment.kind === "pending") {
-          this.sendError(ws, "not_authenticated", "Send hello first.");
-          ws.close(CLOSE_AUTH_TIMEOUT);
-          return;
-        }
         await this.handleKick(ws, attachment, parsed.playerId);
         return;
       case "leave":
-        if (attachment.kind === "pending") {
-          this.sendError(ws, "not_authenticated", "Send hello first.");
-          ws.close(CLOSE_AUTH_TIMEOUT);
-          return;
-        }
         await this.handleLeave(ws, attachment);
+        return;
+      case "start_game":
+        await this.handleStartGame(ws, attachment, parsed);
+        return;
+      case "submit_action":
+        await this.handleGameCommand(ws, attachment, (playerId) => ({
+          type: "submitAction",
+          playerId,
+          targetId: parsed.action.targetId,
+          now: Date.now(),
+        }));
+        return;
+      case "cast_vote":
+        await this.handleGameCommand(ws, attachment, (playerId) => ({
+          type: "castVote",
+          playerId,
+          target: parsed.target,
+          now: Date.now(),
+        }));
+        return;
+      case "retract_vote":
+        await this.handleGameCommand(ws, attachment, (playerId) => ({
+          type: "retractVote",
+          playerId,
+          now: Date.now(),
+        }));
+        return;
+      case "force_advance":
+        await this.handleHostGameCommand(ws, attachment, {
+          type: "forceAdvance",
+          byHost: true,
+          gen: parsed.gen,
+          now: Date.now(),
+        });
+        return;
+      case "mark_absent":
+        await this.handleHostGameCommand(ws, attachment, {
+          type: "markAbsent",
+          byHost: true,
+          playerId: parsed.playerId,
+          now: Date.now(),
+        });
+        return;
+      case "mark_present":
+        await this.handleHostGameCommand(ws, attachment, {
+          type: "markPresent",
+          byHost: true,
+          playerId: parsed.playerId,
+          now: Date.now(),
+        });
+        return;
+      case "new_game":
+        await this.handleNewGame(ws, attachment);
         return;
       default:
         this.sendError(
@@ -285,6 +342,7 @@ export class GameRoom extends DurableObject<Env> {
         type: "welcome",
         you: { isHost: true },
         state,
+        serverNow: Date.now(),
       });
       await this.touchAndBroadcast({ excludeWs: ws });
       return;
@@ -311,6 +369,7 @@ export class GameRoom extends DurableObject<Env> {
         type: "welcome",
         you: { playerId: player.id, isHost: false },
         state,
+        serverNow: Date.now(),
       });
       await this.touchAndBroadcast({ excludeWs: ws });
       return;
@@ -354,6 +413,7 @@ export class GameRoom extends DurableObject<Env> {
       type: "welcome",
       you: { playerId, seatToken, isHost: false },
       state,
+      serverNow: Date.now(),
     });
     await this.touchAndBroadcast({ excludeWs: ws });
   }
@@ -461,6 +521,190 @@ export class GameRoom extends DurableObject<Env> {
   }
 
   // -------------------------------------------------------------------------
+  // Game lifecycle & commands (Spec 03). The engine (`startGame`,
+  // `applyCommand`, `projectFor`, `validateRuleset`) is the only game
+  // interface — this DO never reads or writes `GameState` internals beyond
+  // persisting it opaquely and projecting through `projectFor`.
+  // -------------------------------------------------------------------------
+
+  private async handleStartGame(
+    ws: WebSocket,
+    attachment: Attachment,
+    msg: Extract<ClientMessage, { type: "start_game" }>,
+  ): Promise<void> {
+    // Authority and lifecycle-state failures for start_game are rejections
+    // (Spec 03 D4's authority test list groups start_game with
+    // force_advance/mark_absent) — invalid_ruleset below is the one
+    // explicitly pinned `error` case (D1: "errors return
+    // error{invalid_ruleset, detail} to the host, room stays in lobby").
+    if (attachment.kind !== "host") {
+      this.sendRejection(ws, "not_host");
+      return;
+    }
+
+    const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+    if (!room || room.phase !== "lobby") {
+      this.sendRejection(ws, "game_in_progress");
+      return;
+    }
+
+    const players = await this.getPlayers();
+    if (players.length < 3) {
+      this.sendError(ws, "invalid_ruleset", "At least 3 players are required.");
+      return;
+    }
+
+    const ruleset = msg.ruleset as Ruleset;
+    const validation = validateRuleset(ruleset, players.length);
+    if (validation.errors.length > 0) {
+      this.sendError(
+        ws,
+        "invalid_ruleset",
+        validation.errors.map((e) => e.message).join(" "),
+      );
+      return;
+    }
+
+    const seed =
+      this.env.ALLOW_TEST_SEED === "1" && msg.seed !== undefined
+        ? msg.seed
+        : crypto.getRandomValues(new Uint32Array(1))[0]!;
+
+    const lobbyPlayers: LobbyPlayer[] = players.map((p) => ({
+      id: p.id,
+      name: p.name,
+    }));
+    const result = startGame(lobbyPlayers, ruleset, seed, Date.now());
+    await this.applyGameResult(result, null, room);
+  }
+
+  /** Player-issued in-game commands (`submitAction`/`castVote`/
+   * `retractVote`). Host sockets have no `playerId` and cannot issue these. */
+  private async handleGameCommand(
+    ws: WebSocket,
+    attachment: Attachment,
+    build: (playerId: string) => Command,
+  ): Promise<void> {
+    if (attachment.kind !== "player") {
+      this.sendRejection(ws, "not_a_player");
+      return;
+    }
+    const game = await this.ctx.storage.get<GameState>(GAME_KEY);
+    if (!game) {
+      this.sendRejection(ws, "no_game");
+      return;
+    }
+    const result = applyCommand(game, build(attachment.playerId));
+    await this.applyGameResult(result, game, undefined, ws);
+  }
+
+  /** Host-issued in-game commands (`forceAdvance`/`markAbsent`/
+   * `markPresent`). Authority comes from the socket attachment, never the
+   * client payload — `byHost` on the command is always set by us, here. */
+  private async handleHostGameCommand(
+    ws: WebSocket,
+    attachment: Attachment,
+    cmd: Command,
+  ): Promise<void> {
+    if (attachment.kind !== "host") {
+      this.sendRejection(ws, "not_host");
+      return;
+    }
+    const game = await this.ctx.storage.get<GameState>(GAME_KEY);
+    if (!game) {
+      this.sendRejection(ws, "no_game");
+      return;
+    }
+    const result = applyCommand(game, cmd);
+    await this.applyGameResult(result, game, undefined, ws);
+  }
+
+  private async handleNewGame(
+    ws: WebSocket,
+    attachment: Attachment,
+  ): Promise<void> {
+    if (attachment.kind !== "host") {
+      this.sendRejection(ws, "not_host");
+      return;
+    }
+    const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+    if (!room) {
+      this.sendError(ws, "bad_message", "Room does not exist.");
+      return;
+    }
+    const game = await this.ctx.storage.get<GameState>(GAME_KEY);
+    if (!game || game.phase !== "ended") {
+      this.sendRejection(ws, "not_ended");
+      return;
+    }
+
+    await this.ctx.storage.delete(GAME_KEY);
+    await this.ctx.storage.delete(GAME_DEADLINE_KEY);
+    room.phase = "lobby";
+    await this.ctx.storage.put(ROOM_KEY, room);
+    await this.touchAndBroadcast();
+  }
+
+  /** Apply-persist-broadcast, in that order, atomically per message: no
+   * `await` between the engine call (already happened in the caller) and the
+   * storage put below. `room` may be passed in when the caller already holds
+   * a fresh read (start_game) to avoid a redundant fetch; otherwise it's
+   * re-read here. A `rejection` is sent only to the issuing socket — it
+   * never closes the socket and never broadcasts. `original` lets a true
+   * engine no-op (e.g. a stale `timerExpired` whose `at` no longer matches
+   * `state.deadlineAt` — Spec 02 returns the same state reference, no
+   * rejection) skip persisting and re-broadcasting an unchanged snapshot;
+   * without this a stale alarm would still fan out a redundant frame to
+   * every socket even though nothing changed. */
+  private async applyGameResult(
+    result: ReturnType<typeof applyCommand>,
+    original: GameState | null,
+    room?: RoomMeta,
+    rejectTo?: WebSocket,
+  ): Promise<void> {
+    if (result.rejection) {
+      if (rejectTo) {
+        this.sendRejection(rejectTo, result.rejection.code);
+      }
+      return;
+    }
+
+    if (result.state === original) {
+      return;
+    }
+
+    const meta = room ?? (await this.ctx.storage.get<RoomMeta>(ROOM_KEY));
+    if (!meta) {
+      return;
+    }
+
+    meta.phase = result.state.phase;
+    meta.lastActivityAt = Date.now();
+    await this.ctx.storage.put(GAME_KEY, result.state);
+    await this.ctx.storage.put(ROOM_KEY, meta);
+    await this.applyEffects(result.effects);
+
+    await this.touchAndBroadcast({ skipActivity: true });
+  }
+
+  /** `setDeadline`/`clearDeadline` land in the same storage transaction as
+   * the state put above (no intervening await from the engine call); the
+   * alarm itself is (re)armed afterward by touchAndBroadcast's call to
+   * scheduleNextAlarm() — one scheduler, no second setAlarm call site. */
+  private async applyEffects(effects: Effect[]): Promise<void> {
+    for (const effect of effects) {
+      if (effect.type === "setDeadline") {
+        await this.ctx.storage.put(GAME_DEADLINE_KEY, effect.at);
+      } else if (effect.type === "clearDeadline") {
+        await this.ctx.storage.delete(GAME_DEADLINE_KEY);
+      } else if (effect.type === "gameEnded") {
+        // Nothing beyond the normal broadcast — the ended state and winners
+        // are already in `result.state`/the projected view.
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Close / error / hibernation
   // -------------------------------------------------------------------------
 
@@ -537,6 +781,27 @@ export class GameRoom extends DurableObject<Env> {
       }
     }
 
+    // Game deadline: read fresh from storage (never a value cached earlier
+    // in this turn). If absent or not yet due, it's not this firing's
+    // concern — skip and let scheduleNextAlarm() below re-arm for it. If
+    // due, apply {timerExpired, at}; the engine itself validates
+    // `at === state.deadlineAt` and no-ops otherwise, so an alarm that fires
+    // for a deadline a force-advance already consumed is harmless.
+    const gameDeadlineAt = await this.ctx.storage.get<number>(
+      GAME_DEADLINE_KEY,
+    );
+    if (gameDeadlineAt !== undefined && now >= gameDeadlineAt) {
+      const game = await this.ctx.storage.get<GameState>(GAME_KEY);
+      if (game) {
+        const result = applyCommand(game, {
+          type: "timerExpired",
+          at: gameDeadlineAt,
+          now,
+        });
+        await this.applyGameResult(result, game);
+      }
+    }
+
     await this.scheduleNextAlarm();
   }
 
@@ -561,6 +826,13 @@ export class GameRoom extends DurableObject<Env> {
         deadlines.push(room.lastActivityAt + EMPTY_LOBBY_TTL_MS);
       }
       deadlines.push(room.lastActivityAt + ABSOLUTE_TTL_MS);
+    }
+
+    const gameDeadlineAt = await this.ctx.storage.get<number>(
+      GAME_DEADLINE_KEY,
+    );
+    if (gameDeadlineAt !== undefined) {
+      deadlines.push(gameDeadlineAt);
     }
 
     if (deadlines.length === 0) {
@@ -602,12 +874,23 @@ export class GameRoom extends DurableObject<Env> {
       isYou: viewer.kind === "player" && viewer.playerId === p.id,
     }));
 
+    const game = await this.ctx.storage.get<GameState>(GAME_KEY);
+    const gameView = game
+      ? projectFor(
+          game,
+          viewer.kind === "host"
+            ? { kind: "host" }
+            : { kind: "player", id: viewer.playerId },
+        )
+      : null;
+
     return {
       roomCode: room.code,
-      phase: "lobby",
+      phase: game ? game.phase : "lobby",
       players: views,
       hostConnected,
       createdAt: room.createdAt,
+      game: gameView,
     };
   }
 
@@ -631,6 +914,7 @@ export class GameRoom extends DurableObject<Env> {
       await this.ctx.storage.put(ROOM_KEY, room);
     }
 
+    const serverNow = Date.now();
     for (const sock of liveSockets(this.ctx)) {
       if (sock === opts?.excludeWs) {
         continue;
@@ -644,7 +928,7 @@ export class GameRoom extends DurableObject<Env> {
           ? { kind: "host" }
           : { kind: "player", playerId: attachment.playerId },
       );
-      this.send(sock, { type: "snapshot", state });
+      this.send(sock, { type: "snapshot", state, serverNow });
     }
 
     await this.scheduleNextAlarm();
@@ -656,5 +940,9 @@ export class GameRoom extends DurableObject<Env> {
 
   private sendError(ws: WebSocket, code: ErrorCode, message: string): void {
     this.send(ws, { type: "error", code, message });
+  }
+
+  private sendRejection(ws: WebSocket, code: string): void {
+    this.send(ws, { type: "rejection", code });
   }
 }

@@ -115,13 +115,13 @@ export function applyCommand(input: GameState, cmd: Command): EngineResult {
       if (!player) return reject(input, "unknown_player", cmd.playerId);
       player.absent = cmd.type === "markAbsent";
       state.log.push({ type: cmd.type === "markAbsent" ? "playerAbsent" : "playerPresent", playerId: cmd.playerId });
-      return advanceIfComplete(state, []);
+      return advanceIfComplete(state, [], cmd.now);
     }
     if (!alive(state, cmd.playerId)) return reject(input, "not_alive", cmd.playerId);
     const player = state.players.find((p) => p.id === cmd.playerId)!;
     if (player.absent) return reject(input, "absent", cmd.playerId);
     if (cmd.type === "submitAction") return submitAction(input, state, cmd);
-    if (cmd.type === "castVote") return castVote(input, state, cmd.playerId, cmd.target);
+    if (cmd.type === "castVote") return castVote(input, state, cmd.playerId, cmd.target, cmd.now);
     if (cmd.type === "retractVote") return retractVote(input, state, cmd.playerId);
     return reject(input, "invalid_command");
   } catch {
@@ -136,7 +136,7 @@ function submitAction(original: GameState, state: GameState, cmd: Extract<Comman
     state.mafiaVotes = state.mafiaVotes.filter((v) => v.playerId !== cmd.playerId);
     state.mafiaVotes.push({ playerId: cmd.playerId, targetId: cmd.targetId });
     state.log.push({ type: "actionSubmitted", actorId: cmd.playerId, actionType: "mafiaKill", targetId: cmd.targetId, day: state.day });
-    return advanceIfComplete(state, []);
+    return advanceIfComplete(state, [], cmd.now);
   }
   const spec = activeNightActionFor(state, currentRoles(), cmd.playerId);
   if (!spec || spec.consensus === "mafia") return reject(original, "not_your_phase", cmd.playerId);
@@ -145,10 +145,10 @@ function submitAction(original: GameState, state: GameState, cmd: Extract<Comman
   state.nightActions = state.nightActions.filter((a) => a.actorId !== cmd.playerId);
   state.nightActions.push({ actorId: cmd.playerId, actionType: spec.actionType, targetId: cmd.targetId });
   state.log.push({ type: "actionSubmitted", actorId: cmd.playerId, actionType: spec.actionType, targetId: cmd.targetId, day: state.day });
-  return advanceIfComplete(state, []);
+  return advanceIfComplete(state, [], cmd.now);
 }
 
-function castVote(original: GameState, state: GameState, playerId: string, target: VoteTarget): EngineResult {
+function castVote(original: GameState, state: GameState, playerId: string, target: VoteTarget, now?: number): EngineResult {
   if (state.phase !== "day" && state.phase !== "runoff") return reject(original, "not_your_phase", playerId);
   if (target === "no_murder") {
     if (!state.ruleset.noMurderOption || state.phase === "runoff") return reject(original, "illegal_target", playerId);
@@ -157,7 +157,7 @@ function castVote(original: GameState, state: GameState, playerId: string, targe
   state.votes = state.votes.filter((v) => v.playerId !== playerId);
   state.votes.push({ playerId, target });
   state.log.push({ type: "voteCast", voterId: playerId, target, day: state.day, phase: state.phase });
-  return advanceIfComplete(state, []);
+  return advanceIfComplete(state, [], now);
 }
 
 function retractVote(original: GameState, state: GameState, playerId: string): EngineResult {
