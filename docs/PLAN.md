@@ -27,6 +27,8 @@ concept and the ideas live on in `design.md`, but the rebuild starts from scratc
 | 2026-07-04 | Silent-gameplay principle retained (no in-app chat). | carried from design.md |
 | 2026-07-04 | v1 roles = house six only (villager, mafia, detective, angel, suicide bomber, minion). Deception/power/neutral packs deferred to v1.1 — engine schema must support them structurally (NAR priorities, attack/defense tiers, third-party win conditions). | Tanner |
 | 2026-07-04 | Dead players get **god view** (all roles + actions visible) but no chat. | Tanner |
+| 2026-07-04 | Refinement (from Spec 02 adversarial review): dead god view shows only *resolved* phases — never pending night submissions — because players share a physical room and a dead player's screen must not leak "the detective is checking Sarah" to a living neighbor mid-night. Host god view stays fully live. | orchestrator (flagged to Tanner) |
+| 2026-07-04 | Village win requires mafia **and minions** all dead (design.md house rule; v0 code and Spec 02 v1 draft both had the mafia-only bug). Surviving minions can still win parity for the mafia team. | design.md, confirmed in review |
 | 2026-07-04 | E2E verification: Playwright multi-context scripted full games (automated gate) + Chrome DevTools MCP live multi-browser runs with screenshots (orchestrator's live gate). | Tanner |
 
 ## Architecture

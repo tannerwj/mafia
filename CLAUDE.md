@@ -48,3 +48,14 @@ scaffold** (generator-driven, needs network). Never application logic.
 (grow this — every surprise becomes a rule, same day)
 - 2026-07-04: Session/connection identity ≠ player identity. Any auth model
   that breaks when a socket drops is wrong by construction.
+- 2026-07-04: An agent's idle notification without its final report means
+  the report was lost in transit, not that no work happened (twice today:
+  scaffolder, spec06-review). Recover: check artifacts on disk first, then
+  SendMessage the agent to resend. Never re-run the work blind.
+- 2026-07-04: Watchdog quiet-threshold works: spec01-build went 23 min
+  file-quiet → pinged for status instead of waiting. Keep ~15-20 min as the
+  investigate trigger for build agents.
+- 2026-07-04: Adversarial reviews keep finding the same killer class on
+  stacked specs: UI/downstream specs assuming projection/protocol fields no
+  upstream spec pinned. Every future spec review brief must include "walk
+  every data element against what upstream specs ACTUALLY provide."
