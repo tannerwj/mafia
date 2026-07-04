@@ -1,5 +1,16 @@
-// Pure-TS game engine. No I/O, no Cloudflare imports, fully unit-testable.
-// Spec 00 placeholder: only a version constant so the toolchain has something
-// to type-check and test. Spec 02 builds the real state machine here.
-
-export const ENGINE_VERSION = "0.0.0";
+export { startGame, applyCommand } from "./machine";
+export { projectFor } from "./project";
+export { HOUSE_RULES, validateRuleset, type Ruleset } from "./ruleset";
+export { HOUSE_ROLE_DEFS, type RoleDef, type RoleRegistry } from "./roles";
+export type { ClientGameView, Viewer } from "../shared/game-view";
+export type {
+  Command,
+  Effect,
+  EngineResult,
+  GameEvent,
+  GameState,
+  LobbyPlayer,
+  Phase,
+  PlayerId,
+  RoleId,
+} from "./types";

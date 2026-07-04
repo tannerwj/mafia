@@ -150,3 +150,19 @@
   order stability).
 - Three process rules added to CLAUDE.md (worktree baseline verification,
   wrapper-idle ≠ work-done, lost-report recovery).
+
+## 2026-07-04 — SPEC 01 SHIPPED (fe37a07)
+- spec01-resume finished; notes document two platform discoveries:
+  getWebSockets() includes just-closed sockets same-turn (liveSockets()
+  helper filters), Playwright setOffline doesn't sever established WS
+  (init-script socket tracker force-closes). Wake-recovery constructor
+  guard present.
+- Orchestrator verification ALL GREEN: typecheck · 16 DO tests · 6 E2E
+  multi-context flows · build · static greps (no innerHTML, single setAlarm
+  site) · LIVE GATE on real Chrome (script in scratchpad): 2-tabs-same-
+  browser = distinct seats, killed tab recovers exact seat no duplicate,
+  bad host key → error bad_host_key + close 4003, no host-state leak.
+  Screenshots sent to Tanner.
+- The v0 core complaints (tab-switch death, multi-tab impossible, host
+  takeover hole) are now all demonstrably fixed at the foundation layer.
+- In flight: spec02-fix (engine fix round in scratchpad worktree).
