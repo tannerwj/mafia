@@ -59,3 +59,12 @@ scaffold** (generator-driven, needs network). Never application logic.
   stacked specs: UI/downstream specs assuming projection/protocol fields no
   upstream spec pinned. Every future spec review brief must include "walk
   every data element against what upstream specs ACTUALLY provide."
+- 2026-07-04: Agent worktree isolation based the worktree on origin/master
+  (b8254a2), NOT the local HEAD with our commits — the engine got built in a
+  pre-scaffold checkout. Rule: every worktree brief starts with "run
+  `git log --oneline -1` and STOP if it isn't <expected sha>"; orchestrator
+  verifies deliverables by overlaying them onto a known-good worktree.
+- 2026-07-04: codex-rescue wrapper agents forward to the shared runtime and
+  then go idle with "I'll let you know" — the notification you get is the
+  wrapper stopping, not the work finishing. Judge completion by artifacts on
+  disk (files + implementation notes), never by wrapper chatter.

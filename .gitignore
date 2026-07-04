@@ -152,3 +152,4 @@ worker-configuration.d.ts
 /claude
 
 .claude/settings.local.json
+.claude/worktrees/

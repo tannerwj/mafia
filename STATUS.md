@@ -132,3 +132,21 @@
 - ALL core specs (00–06) now review-hardened and approved. Only Spec 07
   (polish) remains unwritten. Still waiting on spec01-build (watchdog
   pinged, no reply yet).
+
+## 2026-07-04 — Builds: 01 orphaned→resumed; 02 built, verified, fix round
+- spec01-build declared orphaned (10 quiet min, typecheck errors on disk) →
+  spec01-resume launched in main checkout with WIP inventory brief +
+  fresh 20-min watchdog.
+- spec02-build (worktree): wrapper went idle after forwarding to Codex, but
+  the work landed — caveat: the worktree was based on b8254a2 (origin/
+  master), NOT our HEAD, so Codex built the engine inside a pre-scaffold
+  checkout (honest notes flagged it). Orchestrator overlaid the engine onto
+  a clean HEAD worktree (scratchpad/engine-verify): purity greps clean,
+  15/15 tests green, coverage of the hard pins real. Four issues → one fix
+  round (spec02-fix, running): game-view layering inversion (shared must
+  not import engine), startGame now+roles params (implementer caught a real
+  spec gap — Spec 02 → v2.5, committed), kill global registerRoles, widen
+  D7 coverage (firstNightKill-off, timer defaults, markAbsent advance,
+  order stability).
+- Three process rules added to CLAUDE.md (worktree baseline verification,
+  wrapper-idle ≠ work-done, lost-report recovery).

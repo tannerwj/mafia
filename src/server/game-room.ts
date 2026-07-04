@@ -1,35 +1,199 @@
 import { DurableObject } from "cloudflare:workers";
 import type {
   ClientMessage,
+  ClientPlayerView,
+  ClientRoomState,
+  ErrorCode,
   ServerMessage,
 } from "../shared/protocol";
+import {
+  CLOSE_AUTH_TIMEOUT,
+  CLOSE_BAD_CREDENTIAL,
+  CLOSE_KICKED,
+} from "../shared/protocol";
 
-// GameRoom Durable Object.
-//
-// Spec 00 scope: prove the hibernatable WebSocket path end to end. It accepts a
-// WebSocket via the Hibernation API and answers each `ping` with a `pong`
-// carrying the same nonce. No game state yet — Spec 01 introduces identity,
-// snapshots, and the real protocol; Spec 03 wires in the engine.
+// ---------------------------------------------------------------------------
+// Storage schema (Spec 01). No in-memory session state anywhere — everything
+// that must survive hibernation/eviction lives in `ctx.storage`, and identity
+// lives only in the WebSocket attachment (never trusted from client input).
+// ---------------------------------------------------------------------------
+
+interface RoomMeta {
+  code: string;
+  hostKey: string;
+  // Spec 01 only ever writes "lobby" — the type is a plain string (rather
+  // than the literal) so tests can fake a later phase via direct storage
+  // write, per the D6 "join-while-not-lobby" test.
+  phase: string;
+  createdAt: number;
+  lastActivityAt: number;
+}
+
+interface PlayerRecord {
+  id: string;
+  name: string;
+  seatToken: string;
+  joinedAt: number;
+}
+
+interface PendingAuthEntry {
+  tagId: string;
+  connectedAt: number;
+}
+
+/** Identity authority for a socket — set once at accept time (`pending`),
+ * replaced on successful `hello`. Read via `ws.deserializeAttachment()`,
+ * never inferred from client-supplied ids. Attachments hold identity only,
+ * never game state (16KiB serializeAttachment limit). */
+type Attachment =
+  | { kind: "pending"; tagId: string; connectedAt: number }
+  | { kind: "host"; connectedAt: number }
+  | { kind: "player"; playerId: string; connectedAt: number };
+
+const ROOM_KEY = "room";
+const PLAYERS_KEY = "players";
+const PENDING_AUTH_KEY = "pendingAuth";
+
+const AUTH_REAP_MS = 30_000;
+const EMPTY_LOBBY_TTL_MS = 60 * 60 * 1000; // 1h
+const ABSOLUTE_TTL_MS = 6 * 60 * 60 * 1000; // 6h
+
+const RESERVED_CLOSE_CODES = new Set([1005, 1006, 1015]);
+
+function normalizeCloseCode(code: number): number {
+  return code >= 1000 && code < 5000 && !RESERVED_CLOSE_CODES.has(code)
+    ? code
+    : 1000;
+}
+
+/** `getWebSockets()` can still return a socket that was `close()`d earlier in
+ * the same synchronous turn (e.g. a socket the alarm just reaped, or one a
+ * kick just closed) — its readyState is no longer OPEN, but it hasn't been
+ * dropped from the hibernation manager's bookkeeping yet. Every liveness,
+ * presence, and broadcast check in this file must filter through this so a
+ * just-closed socket never counts as "connected". */
+function liveSockets(ctx: DurableObjectState, tag?: string): WebSocket[] {
+  return ctx
+    .getWebSockets(tag)
+    .filter((sock) => sock.readyState === WebSocket.READY_STATE_OPEN);
+}
+
+/** Cloudflare tags are fixed at `acceptWebSocket` time and cannot be changed
+ * on successful `hello` (only the attachment can). So tags stay `pending:<id>`
+ * for their entire life and are never used to look up host/player sockets —
+ * `socketsFor()` below does that by scanning all live sockets and reading
+ * each one's attachment, which is the only identity authority. */
+function socketsFor(
+  ctx: DurableObjectState,
+  predicate: (a: Attachment) => boolean,
+): WebSocket[] {
+  return liveSockets(ctx).filter((sock) => {
+    const attachment = sock.deserializeAttachment() as Attachment | null;
+    return attachment !== null && predicate(attachment);
+  });
+}
+
 export class GameRoom extends DurableObject<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    // Wake-recovery guard (flagged by Spec 03 v2.2 for hardening here):
+    // persisting a deadline input (pendingAuth entry, lastActivityAt, a
+    // future spec's gameDeadlineAt) and arming the alarm happen in separate
+    // turns, so a crash between them can leave a due deadline with no armed
+    // alarm. If we come back up with nothing armed, re-derive it from
+    // storage — scheduleNextAlarm() is idempotent and no-ops safely when
+    // there's no room or no deadline inputs.
+    ctx.blockConcurrencyWhile(async () => {
+      const alarm = await ctx.storage.getAlarm();
+      if (alarm === null) {
+        await this.scheduleNextAlarm();
+      }
+    });
+  }
+
   override async fetch(request: Request): Promise<Response> {
-    if (request.headers.get("Upgrade") !== "websocket") {
-      return new Response("Expected WebSocket upgrade", { status: 426 });
+    const url = new URL(request.url);
+
+    // Internal claim endpoint — called only by the Worker's POST /api/rooms
+    // handler, never reachable from a client directly (see Worker routing).
+    if (url.pathname === "/internal/claim" && request.method === "POST") {
+      return this.handleClaim(request);
     }
 
-    const { 0: client, 1: server } = new WebSocketPair();
-    // acceptWebSocket (not server.accept) opts the socket into hibernation:
-    // the DO can be evicted between messages and the socket survives.
-    this.ctx.acceptWebSocket(server);
+    if (url.pathname === "/internal/meta" && request.method === "GET") {
+      return this.handleMeta();
+    }
 
-    return new Response(null, { status: 101, webSocket: client });
+    if (url.pathname === "/internal/ws") {
+      if (request.headers.get("Upgrade") !== "websocket") {
+        return new Response("Expected WebSocket upgrade", { status: 426 });
+      }
+      const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+      if (!room) {
+        return new Response("Room not found", { status: 404 });
+      }
+
+      const { 0: client, 1: server } = new WebSocketPair();
+      const tagId = crypto.randomUUID();
+      const connectedAt = Date.now();
+
+      this.ctx.acceptWebSocket(server, [`pending:${tagId}`]);
+      const attachment: Attachment = { kind: "pending", tagId, connectedAt };
+      server.serializeAttachment(attachment);
+
+      const pending =
+        (await this.ctx.storage.get<PendingAuthEntry[]>(PENDING_AUTH_KEY)) ??
+        [];
+      pending.push({ tagId, connectedAt });
+      await this.ctx.storage.put(PENDING_AUTH_KEY, pending);
+      await this.scheduleNextAlarm();
+
+      return new Response(null, { status: 101, webSocket: client });
+    }
+
+    return new Response("Not found", { status: 404 });
   }
+
+  private async handleClaim(request: Request): Promise<Response> {
+    const existing = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+    if (existing) {
+      return Response.json({ status: "taken" });
+    }
+
+    const body = (await request.json()) as { code: string };
+    const now = Date.now();
+    const hostKey = crypto.randomUUID();
+    const room: RoomMeta = {
+      code: body.code,
+      hostKey,
+      phase: "lobby",
+      createdAt: now,
+      lastActivityAt: now,
+    };
+    await this.ctx.storage.put(ROOM_KEY, room);
+    await this.ctx.storage.put(PLAYERS_KEY, [] as PlayerRecord[]);
+    await this.scheduleNextAlarm();
+    return Response.json({ status: "claimed", hostKey });
+  }
+
+  private async handleMeta(): Promise<Response> {
+    const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+    if (!room) {
+      return Response.json({ exists: false });
+    }
+    return Response.json({ exists: true, phase: room.phase });
+  }
+
+  // -------------------------------------------------------------------------
+  // WebSocket message handling
+  // -------------------------------------------------------------------------
 
   override async webSocketMessage(
     ws: WebSocket,
     message: string | ArrayBuffer,
   ): Promise<void> {
     if (typeof message !== "string") {
-      // Spec 00 protocol is JSON text only.
+      this.sendError(ws, "bad_message", "Binary frames are not supported.");
       return;
     }
 
@@ -37,14 +201,268 @@ export class GameRoom extends DurableObject<Env> {
     try {
       parsed = JSON.parse(message) as ClientMessage;
     } catch {
+      this.sendError(ws, "bad_message", "Malformed JSON.");
       return;
     }
 
-    if (parsed.type === "ping") {
-      const reply: ServerMessage = { type: "pong", nonce: parsed.nonce };
-      ws.send(JSON.stringify(reply));
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      typeof (parsed as { type?: unknown }).type !== "string"
+    ) {
+      this.sendError(ws, "bad_message", "Malformed message.");
+      return;
+    }
+
+    const attachment = ws.deserializeAttachment() as Attachment | null;
+    if (!attachment) {
+      // Should be unreachable — every accepted socket gets an attachment —
+      // but treat as unauthenticated defensively rather than throw.
+      this.sendError(ws, "not_authenticated", "No identity on socket.");
+      ws.close(CLOSE_AUTH_TIMEOUT);
+      return;
+    }
+
+    switch (parsed.type) {
+      case "hello":
+        await this.handleHello(ws, attachment, parsed);
+        return;
+      case "ping":
+        if (attachment.kind === "pending") {
+          this.sendError(ws, "not_authenticated", "Send hello first.");
+          ws.close(CLOSE_AUTH_TIMEOUT);
+          return;
+        }
+        this.send(ws, { type: "pong" });
+        return;
+      case "kick":
+        if (attachment.kind === "pending") {
+          this.sendError(ws, "not_authenticated", "Send hello first.");
+          ws.close(CLOSE_AUTH_TIMEOUT);
+          return;
+        }
+        await this.handleKick(ws, attachment, parsed.playerId);
+        return;
+      case "leave":
+        if (attachment.kind === "pending") {
+          this.sendError(ws, "not_authenticated", "Send hello first.");
+          ws.close(CLOSE_AUTH_TIMEOUT);
+          return;
+        }
+        await this.handleLeave(ws, attachment);
+        return;
+      default:
+        this.sendError(
+          ws,
+          "unknown_type",
+          `Unknown message type: ${String((parsed as { type: unknown }).type)}`,
+        );
+        return;
     }
   }
+
+  private async handleHello(
+    ws: WebSocket,
+    attachment: Attachment,
+    msg: Extract<ClientMessage, { type: "hello" }>,
+  ): Promise<void> {
+    const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+    if (!room) {
+      this.sendError(ws, "bad_message", "Room does not exist.");
+      ws.close(CLOSE_BAD_CREDENTIAL);
+      return;
+    }
+
+    if (msg.auth.kind === "host") {
+      if (msg.auth.hostKey !== room.hostKey) {
+        this.sendError(ws, "bad_host_key", "Invalid host key.");
+        ws.close(CLOSE_BAD_CREDENTIAL);
+        return;
+      }
+      await this.completeAuth(ws, attachment, { kind: "host" });
+      const state = await this.buildStateFor({ kind: "host" });
+      this.send(ws, {
+        type: "welcome",
+        you: { isHost: true },
+        state,
+      });
+      await this.touchAndBroadcast({ excludeWs: ws });
+      return;
+    }
+
+    if (msg.auth.kind === "seat") {
+      const seatToken = msg.auth.seatToken;
+      const players = await this.getPlayers();
+      const player = players.find((p) => p.seatToken === seatToken);
+      if (!player) {
+        this.sendError(ws, "bad_seat_token", "Unknown seat token.");
+        ws.close(CLOSE_BAD_CREDENTIAL);
+        return;
+      }
+      await this.completeAuth(ws, attachment, {
+        kind: "player",
+        playerId: player.id,
+      });
+      const state = await this.buildStateFor({
+        kind: "player",
+        playerId: player.id,
+      });
+      this.send(ws, {
+        type: "welcome",
+        you: { playerId: player.id, isHost: false },
+        state,
+      });
+      await this.touchAndBroadcast({ excludeWs: ws });
+      return;
+    }
+
+    // join: brand-new player, lobby-gated (rejoin-by-token above is not).
+    if (room.phase !== "lobby") {
+      this.sendError(ws, "game_in_progress", "Cannot join once the game has started.");
+      return;
+    }
+
+    const name = msg.auth.name.trim();
+    if (name.length < 1 || name.length > 20) {
+      this.sendError(ws, "invalid_name", "Name must be 1-20 characters.");
+      return;
+    }
+
+    const players = await this.getPlayers();
+    const nameTaken = players.some(
+      (p) => p.name.toLowerCase() === name.toLowerCase(),
+    );
+    if (nameTaken) {
+      this.sendError(ws, "name_taken", "That name is already taken.");
+      return;
+    }
+
+    const playerId = crypto.randomUUID();
+    const seatToken = crypto.randomUUID();
+    const record: PlayerRecord = {
+      id: playerId,
+      name,
+      seatToken,
+      joinedAt: Date.now(),
+    };
+    players.push(record);
+    await this.ctx.storage.put(PLAYERS_KEY, players);
+
+    await this.completeAuth(ws, attachment, { kind: "player", playerId });
+    const state = await this.buildStateFor({ kind: "player", playerId });
+    this.send(ws, {
+      type: "welcome",
+      you: { playerId, seatToken, isHost: false },
+      state,
+    });
+    await this.touchAndBroadcast({ excludeWs: ws });
+  }
+
+  /** Update attachment, remove from pendingAuth, retag is not possible
+   * (Cloudflare tags are fixed at accept time) — the attachment is the
+   * identity authority from here on. */
+  private async completeAuth(
+    ws: WebSocket,
+    prev: Attachment,
+    next: { kind: "host" } | { kind: "player"; playerId: string },
+  ): Promise<void> {
+    const connectedAt = prev.kind === "pending" ? prev.connectedAt : Date.now();
+    const attachment: Attachment =
+      next.kind === "host"
+        ? { kind: "host", connectedAt }
+        : { kind: "player", playerId: next.playerId, connectedAt };
+    ws.serializeAttachment(attachment);
+
+    if (prev.kind === "pending") {
+      const pending =
+        (await this.ctx.storage.get<PendingAuthEntry[]>(PENDING_AUTH_KEY)) ??
+        [];
+      const filtered = pending.filter((e) => e.tagId !== prev.tagId);
+      await this.ctx.storage.put(PENDING_AUTH_KEY, filtered);
+    }
+  }
+
+  private async handleKick(
+    ws: WebSocket,
+    attachment: Attachment,
+    targetPlayerId: string,
+  ): Promise<void> {
+    if (attachment.kind !== "host") {
+      this.sendError(ws, "not_host", "Only the host can kick.");
+      return;
+    }
+
+    const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+    if (!room || room.phase !== "lobby") {
+      this.sendError(ws, "not_lobby", "Kick is only available in the lobby.");
+      return;
+    }
+
+    const players = await this.getPlayers();
+    const idx = players.findIndex((p) => p.id === targetPlayerId);
+    if (idx === -1) {
+      this.sendError(ws, "player_not_found", "No such player.");
+      return;
+    }
+
+    // Atomicity: storage mutation + socket closes happen synchronously in
+    // this turn (no `await` between the storage write below and the close
+    // loop) so no in-flight `hello` presenting the removed seat token can
+    // interleave with the kick.
+    players.splice(idx, 1);
+    const writePlayers = this.ctx.storage.put(PLAYERS_KEY, players);
+
+    const sockets = socketsFor(
+      this.ctx,
+      (a) => a.kind === "player" && a.playerId === targetPlayerId,
+    );
+    for (const sock of sockets) {
+      this.send(sock, { type: "kicked" });
+      sock.close(CLOSE_KICKED);
+    }
+
+    await writePlayers;
+    await this.touchAndBroadcast();
+  }
+
+  private async handleLeave(
+    ws: WebSocket,
+    attachment: Attachment,
+  ): Promise<void> {
+    if (attachment.kind !== "player") {
+      this.sendError(ws, "bad_message", "Only players can leave.");
+      return;
+    }
+
+    const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+    if (!room || room.phase !== "lobby") {
+      this.sendError(ws, "not_lobby", "Leave is only available in the lobby.");
+      return;
+    }
+
+    const playerId = attachment.playerId;
+    const players = await this.getPlayers();
+    const idx = players.findIndex((p) => p.id === playerId);
+    if (idx === -1) {
+      return;
+    }
+    players.splice(idx, 1);
+    await this.ctx.storage.put(PLAYERS_KEY, players);
+
+    const sockets = socketsFor(
+      this.ctx,
+      (a) => a.kind === "player" && a.playerId === playerId,
+    );
+    for (const sock of sockets) {
+      sock.close(1000);
+    }
+
+    await this.touchAndBroadcast();
+  }
+
+  // -------------------------------------------------------------------------
+  // Close / error / hibernation
+  // -------------------------------------------------------------------------
 
   override async webSocketClose(
     ws: WebSocket,
@@ -52,11 +470,191 @@ export class GameRoom extends DurableObject<Env> {
     _reason: string,
     _wasClean: boolean,
   ): Promise<void> {
-    // Echo the peer's close code, but 1005/1006/1015 are reserved codes that
-    // may surface here yet cannot be sent in a Close frame — normalize to 1000.
-    const RESERVED = new Set([1005, 1006, 1015]);
-    const closeCode =
-      code >= 1000 && code < 5000 && !RESERVED.has(code) ? code : 1000;
-    ws.close(closeCode);
+    const attachment = ws.deserializeAttachment() as Attachment | null;
+    if (attachment?.kind === "pending") {
+      const pending =
+        (await this.ctx.storage.get<PendingAuthEntry[]>(PENDING_AUTH_KEY)) ??
+        [];
+      const filtered = pending.filter((e) => e.tagId !== attachment.tagId);
+      if (filtered.length !== pending.length) {
+        await this.ctx.storage.put(PENDING_AUTH_KEY, filtered);
+      }
+    }
+    ws.close(normalizeCloseCode(code));
+    await this.touchAndBroadcast({ skipActivity: true });
+  }
+
+  override async webSocketError(ws: WebSocket, _error: unknown): Promise<void> {
+    const attachment = ws.deserializeAttachment() as Attachment | null;
+    if (attachment?.kind === "pending") {
+      const pending =
+        (await this.ctx.storage.get<PendingAuthEntry[]>(PENDING_AUTH_KEY)) ??
+        [];
+      const filtered = pending.filter((e) => e.tagId !== attachment.tagId);
+      if (filtered.length !== pending.length) {
+        await this.ctx.storage.put(PENDING_AUTH_KEY, filtered);
+      }
+    }
+    await this.touchAndBroadcast({ skipActivity: true });
+  }
+
+  // -------------------------------------------------------------------------
+  // Unified alarm scheduler — ONE alarm slot. Every deadline-affecting event
+  // calls scheduleNextAlarm(); setAlarm() is called nowhere else in this file.
+  // -------------------------------------------------------------------------
+
+  override async alarm(): Promise<void> {
+    const now = Date.now();
+
+    const pending =
+      (await this.ctx.storage.get<PendingAuthEntry[]>(PENDING_AUTH_KEY)) ?? [];
+    const expired = pending.filter((e) => now - e.connectedAt >= AUTH_REAP_MS);
+    if (expired.length > 0) {
+      const expiredIds = new Set(expired.map((e) => e.tagId));
+      for (const entry of expired) {
+        const sockets = liveSockets(this.ctx, `pending:${entry.tagId}`);
+        for (const sock of sockets) {
+          sock.close(CLOSE_AUTH_TIMEOUT);
+        }
+      }
+      const remaining = pending.filter((e) => !expiredIds.has(e.tagId));
+      await this.ctx.storage.put(PENDING_AUTH_KEY, remaining);
+    }
+
+    const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+    if (room) {
+      const hasLiveSocket = liveSockets(this.ctx).length > 0;
+      if (!hasLiveSocket) {
+        const players = await this.getPlayers();
+        const emptyLobby = room.phase === "lobby" && players.length === 0;
+        const shouldWipeEmptyLobby =
+          emptyLobby && now - room.lastActivityAt >= EMPTY_LOBBY_TTL_MS;
+        const shouldWipeTtl = now - room.lastActivityAt >= ABSOLUTE_TTL_MS;
+        if (shouldWipeEmptyLobby || shouldWipeTtl) {
+          await this.ctx.storage.deleteAll();
+          return;
+        }
+      }
+    }
+
+    await this.scheduleNextAlarm();
+  }
+
+  private async scheduleNextAlarm(): Promise<void> {
+    const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+    if (!room) {
+      return;
+    }
+
+    const deadlines: number[] = [];
+
+    const pending =
+      (await this.ctx.storage.get<PendingAuthEntry[]>(PENDING_AUTH_KEY)) ?? [];
+    for (const entry of pending) {
+      deadlines.push(entry.connectedAt + AUTH_REAP_MS);
+    }
+
+    const hasLiveSocket = liveSockets(this.ctx).length > 0;
+    if (!hasLiveSocket) {
+      const players = await this.getPlayers();
+      if (room.phase === "lobby" && players.length === 0) {
+        deadlines.push(room.lastActivityAt + EMPTY_LOBBY_TTL_MS);
+      }
+      deadlines.push(room.lastActivityAt + ABSOLUTE_TTL_MS);
+    }
+
+    if (deadlines.length === 0) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+
+    const next = Math.min(...deadlines);
+    await this.ctx.storage.setAlarm(next);
+  }
+
+  // -------------------------------------------------------------------------
+  // Snapshot / broadcast helpers
+  // -------------------------------------------------------------------------
+
+  private async getPlayers(): Promise<PlayerRecord[]> {
+    return (await this.ctx.storage.get<PlayerRecord[]>(PLAYERS_KEY)) ?? [];
+  }
+
+  private async buildStateFor(
+    viewer: { kind: "host" } | { kind: "player"; playerId: string },
+  ): Promise<ClientRoomState> {
+    const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+    if (!room) {
+      throw new Error("buildStateFor called with no room");
+    }
+    const players = await this.getPlayers();
+    const hostConnected =
+      socketsFor(this.ctx, (a) => a.kind === "host").length > 0;
+
+    const views: ClientPlayerView[] = players.map((p) => ({
+      id: p.id,
+      name: p.name,
+      connected:
+        socketsFor(
+          this.ctx,
+          (a) => a.kind === "player" && a.playerId === p.id,
+        ).length > 0,
+      isYou: viewer.kind === "player" && viewer.playerId === p.id,
+    }));
+
+    return {
+      roomCode: room.code,
+      phase: "lobby",
+      players: views,
+      hostConnected,
+      createdAt: room.createdAt,
+    };
+  }
+
+  /** Recompute lastActivityAt (unless skipped) and push a fresh personalized
+   * snapshot to every connected socket, then re-arm the alarm. Called after
+   * every state-changing event. `excludeWs` skips the socket that just got a
+   * `welcome` reply on this same hello — that message already carries the
+   * current state, so re-sending a snapshot to it immediately after would be
+   * a redundant duplicate. */
+  private async touchAndBroadcast(opts?: {
+    skipActivity?: boolean;
+    excludeWs?: WebSocket;
+  }): Promise<void> {
+    const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+    if (!room) {
+      return;
+    }
+
+    if (!opts?.skipActivity) {
+      room.lastActivityAt = Date.now();
+      await this.ctx.storage.put(ROOM_KEY, room);
+    }
+
+    for (const sock of liveSockets(this.ctx)) {
+      if (sock === opts?.excludeWs) {
+        continue;
+      }
+      const attachment = sock.deserializeAttachment() as Attachment | null;
+      if (!attachment || attachment.kind === "pending") {
+        continue;
+      }
+      const state = await this.buildStateFor(
+        attachment.kind === "host"
+          ? { kind: "host" }
+          : { kind: "player", playerId: attachment.playerId },
+      );
+      this.send(sock, { type: "snapshot", state });
+    }
+
+    await this.scheduleNextAlarm();
+  }
+
+  private send(ws: WebSocket, msg: ServerMessage): void {
+    ws.send(JSON.stringify(msg));
+  }
+
+  private sendError(ws: WebSocket, code: ErrorCode, message: string): void {
+    this.send(ws, { type: "error", code, message });
   }
 }
