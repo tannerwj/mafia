@@ -25,6 +25,9 @@ concept and the ideas live on in `design.md`, but the rebuild starts from scratc
 | 2026-07-04 | Art direction: **noir/speakeasy** — near-black `#0c0a09`, blood red `#991b1b`, brass `#ca8a04`, serif display + clean sans body. | Tanner |
 | 2026-07-04 | Client stack: Vite + React + Tailwind v4; shadcn/Radix primitives selectively (Dialog, Drawer, Button, Sonner). | Tanner |
 | 2026-07-04 | Silent-gameplay principle retained (no in-app chat). | carried from design.md |
+| 2026-07-04 | v1 roles = house six only (villager, mafia, detective, angel, suicide bomber, minion). Deception/power/neutral packs deferred to v1.1 — engine schema must support them structurally (NAR priorities, attack/defense tiers, third-party win conditions). | Tanner |
+| 2026-07-04 | Dead players get **god view** (all roles + actions visible) but no chat. | Tanner |
+| 2026-07-04 | E2E verification: Playwright multi-context scripted full games (automated gate) + Chrome DevTools MCP live multi-browser runs with screenshots (orchestrator's live gate). | Tanner |
 
 ## Architecture
 
@@ -90,6 +93,16 @@ docs/specs/   # the contracts (NN-<piece>.md + NN-implementation-notes.md)
   sees mafia). Night resolution is an ordered pipeline (block → protect →
   kill → investigate → …). Adding a role = one RoleDef + at most one handler.
 - Win conditions as evaluators run after every state change.
+- **Resolution model (from rules research, 2026-07-04 — see
+  docs/research/mafia-rules-research.md)**: Natural Action Resolution (NAR) —
+  priority ladder control/redirect → roleblock → protection → kills
+  (simultaneous; a killed player's own action still resolves) →
+  investigations last. Kill resolution via Town-of-Salem attack/defense tiers
+  (attack lands iff attack > defense). Mutual-roleblock and same-priority
+  tie-breaks (Neutral → Mafia → Town, then seat order) pinned in Spec 02.
+- Default mafia count `round(√n)`, host override always. AFK protection:
+  per-action auto-default ("no action") at timer expiry so one sleeping phone
+  never stalls a night.
 - Per-player **visibility projection** is a single pure function — the only
   place that decides who may see what. (v0 leaked via ad-hoc payloads.)
 
@@ -117,7 +130,7 @@ pause/resume timers, kick (lobby) / mark-absent (mid-game), new-game reset.
 | 03 | DO ⇄ engine integration | Wire engine into GameRoom, phase timers via alarms, host force-advance, personalized snapshot delivery. |
 | 04 | Player UI | Noir theme tokens; lobby, role reveal, night-action drawer, day vote grid, dead/spectator view, end screen. |
 | 05 | Host console | God view, ruleset editor, pacing controls. |
-| 06 | Roles v1 + custom rules | House six (villager, mafia, detective, angel, suicide bomber, minion) + additions chosen from rules research; rule modifiers. |
+| 06 | Custom rules + dead god-view | Rule modifiers UI (tie policy, consensus mode, reveal-on-death, first-night, timers) over the house six; dead-player god view. Role packs (Godfather/Framer/Janitor, Vigilante/Escort/Mayor, Jester/Executioner/Survivor) deferred to v1.1. |
 | 07 | Polish | PWA + wake lock, QR join, sound/haptics cues, game history. |
 
 Each spec: adversarial review (Codex) → build (Codex) → independent verify

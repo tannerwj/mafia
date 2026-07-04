@@ -140,4 +140,15 @@ vite.config.ts.timestamp-*
 
 # cloudflare
 .wrangler
+worker-configuration.d.ts
 
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# Local stray file (not part of the project)
+/claude
+
+.claude/settings.local.json

@@ -1,22 +1,37 @@
 {
   "name": "mafia-game",
   "version": "1.0.0",
-  "description": "A minimalist web-based Mafia game",
-  "main": "src/worker.js",
+  "private": true,
+  "type": "module",
+  "description": "A phone-first web app that acts as a silent digital game master for in-person Mafia games.",
+  "license": "MIT",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "dev": "vite dev",
+    "build": "vite build",
+    "deploy": "vite build && wrangler deploy",
+    "typecheck": "tsc --build --force",
+    "test": "vitest run --project engine && vitest run --project server",
+    "test:e2e": "playwright test",
     "tail": "wrangler tail"
   },
-  "keywords": [
-    "mafia",
-    "game",
-    "cloudflare",
-    "workers"
-  ],
-  "author": "",
-  "license": "MIT",
+  "dependencies": {
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
   "devDependencies": {
-    "wrangler": "^4.23.0"
+    "@cloudflare/vite-plugin": "^1.43.0",
+    "@cloudflare/vitest-pool-workers": "^0.18.0",
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@playwright/test": "^1.61.1",
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/node": "^26.1.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.4",
+    "tailwindcss": "^4.3.2",
+    "typescript": "^6.0.3",
+    "vite": "^7.1.0",
+    "vitest": "^4.1.9",
+    "wrangler": "^4.107.0"
   }
 }

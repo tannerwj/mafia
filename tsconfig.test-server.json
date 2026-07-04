@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test-server.tsbuildinfo",
+    "lib": ["ES2022"],
+    "types": [
+      "@cloudflare/workers-types/experimental",
+      "@cloudflare/vitest-pool-workers/types"
+    ],
+    "noEmit": true
+  },
+  "include": ["test/server", "src/server", "src/shared", "worker-configuration.d.ts"]
+}
