@@ -1,6 +1,13 @@
 # Spec 02 — Game engine core (pure TS)
 
-**v2.4 — 2026-07-04 · Status: approved for build**
+**v2.5 — 2026-07-04 · Status: approved for build**
+*v2.5 (build fallout — implementer caught a real signature gap):
+`startGame(players, ruleset, seed, now, roles?)` — `now` (epoch ms) lets a
+configured night-1 timer emit its setDeadline effect at start; `roles`
+optionally injects a role registry (default: house six) — no global mutable
+`registerRoles`. View types (`ClientGameView`, `Viewer`) are DEFINED in
+`src/shared/game-view.ts` with no engine imports; the engine imports them
+from shared (dependency points engine → shared, never the reverse).*
 *v2.4 (Spec 06 review fallout): majority threshold defined w.r.t.
 abstentions; `validateRuleset` signature pinned, declared semantic-only
 (shape coercion is the caller's job); 5s timer floor.*
