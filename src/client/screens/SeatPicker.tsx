@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { SeatBackupEntry } from "../net/identity";
+import { Button } from "../components/ui/button";
 
 export default function SeatPicker({
   backups,
@@ -21,8 +22,8 @@ export default function SeatPicker({
   }
 
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-stone-950 p-6 text-stone-100">
-      <h1 className="font-serif text-3xl text-red-800">Join the game</h1>
+    <main className="safe-top safe-bottom safe-x mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-8 bg-ink p-6 text-bone">
+      <h1 className="font-display text-4xl text-blood">Join the game</h1>
 
       {backups.length > 0 && !showJoinNew && (
         <div className="flex w-full max-w-xs flex-col gap-3">
@@ -32,7 +33,7 @@ export default function SeatPicker({
               type="button"
               data-testid="rejoin-backup"
               onClick={() => onPickBackup(entry)}
-              className="rounded border border-stone-600 px-4 py-3 text-left text-stone-100"
+              className="min-h-11 rounded-md border border-smoke bg-ink-2 px-4 py-3 text-left text-bone hover:border-brass"
             >
               Rejoin as {entry.name}
             </button>
@@ -41,7 +42,7 @@ export default function SeatPicker({
             type="button"
             data-testid="join-as-new"
             onClick={() => setShowJoinNew(true)}
-            className="rounded border border-dashed border-stone-600 px-4 py-3 text-stone-300"
+            className="min-h-11 rounded-md border border-dashed border-smoke px-4 py-3 text-smoke"
           >
             Join as someone new
           </button>
@@ -60,20 +61,16 @@ export default function SeatPicker({
             maxLength={20}
             placeholder="Your name"
             autoFocus
-            className="rounded bg-stone-800 px-3 py-2 text-stone-50"
+            className="h-12 rounded-md border border-smoke bg-ink-2 px-3 text-bone placeholder:text-smoke focus:border-brass focus:outline-none"
           />
-          <button
-            type="submit"
-            data-testid="join-name-submit"
-            className="rounded bg-red-800 px-4 py-2 font-semibold text-stone-50"
-          >
+          <Button type="submit" data-testid="join-name-submit" className="w-full">
             Join
-          </button>
+          </Button>
           {backups.length > 0 && (
             <button
               type="button"
               onClick={() => setShowJoinNew(false)}
-              className="text-sm text-stone-400"
+              className="min-h-11 text-sm text-smoke"
             >
               Back to saved seats
             </button>

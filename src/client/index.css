@@ -1,1 +1,115 @@
 @import "tailwindcss";
+
+/* Self-hosted variable Playfair Display (woff2, bundled by Vite) — no
+   external font / CDN requests anywhere, per D1. Only the weight axis range
+   this app actually uses (display headings) is imported to keep the bundle
+   small. */
+@import "@fontsource-variable/playfair-display";
+
+/* ---------------------------------------------------------------------------
+ * Noir theme tokens (D1). Dark always — there is no light mode, this app is
+ * used in dim party rooms. Every color the UI uses funnels through these.
+ * --------------------------------------------------------------------------- */
+@theme {
+  --color-ink: #0c0a09;
+  --color-ink-2: #1c1917;
+  --color-ink-3: #292524;
+  --color-blood: #991b1b;
+  --color-brass: #ca8a04;
+  --color-bone: #e7e5e4;
+  --color-smoke: #44403c;
+
+  --font-display: "Playfair Display Variable", ui-serif, Georgia, serif;
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background-color: var(--color-ink);
+  color: var(--color-bone);
+  overscroll-behavior-y: none;
+}
+
+body {
+  font-family: var(--font-sans);
+  /* No horizontal scroll, ever (D2 pin). */
+  overflow-x: hidden;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+/* ---------------------------------------------------------------------------
+ * Phase tinting (D1). Night screens stay cool/pure ink; day screens go warm
+ * (ink-2 surface + brass emphasis). The transition itself is an interruptible
+ * 300ms fade through black — implemented as a plain opacity/background
+ * transition on the phase-tint wrapper, driven by a data attribute so the
+ * "previous phase" bookkeeping (needed only to know a transition is in
+ * flight) can live in the UI-only zustand slot, not here.
+ * --------------------------------------------------------------------------- */
+.phase-tint {
+  background-color: var(--color-ink);
+  /* Each leg (fade out, then fade in once the tint bucket swaps) is half
+   * the spec's pinned 300ms total transition budget — see FADE_MS in
+   * GameScreen.tsx for why this must stay in lockstep with that constant. */
+  transition:
+    background-color 150ms ease,
+    opacity 150ms ease;
+}
+
+.phase-tint[data-tint="day"] {
+  background-color: var(--color-ink-2);
+}
+
+.phase-tint[data-tint="fading"] {
+  opacity: 0;
+}
+
+/* Safe-area padding utilities (notches / home indicators). Tailwind v4 has
+ * no built-in env() utility, so these are hand-rolled the same way the rest
+ * of D1's tokens are. */
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.safe-x {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* HoldToPeek affordance: defeat iOS long-press callout/selection so a
+ * press-and-hold gesture doesn't trigger the system magnifier/selection
+ * menu instead of the reveal. */
+.no-callout {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+
+/* Standard visually-hidden-but-announced pattern (Radix's own
+ * VisuallyHidden primitive does the same thing; hand-rolled here since it's
+ * a separate package outside D1's closed dependency budget). Used for the
+ * HoldToPeek aria-live announcer and for vaul Drawer.Title/Description text
+ * that only needs to exist for screen readers. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}

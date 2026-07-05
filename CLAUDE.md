@@ -68,3 +68,9 @@ scaffold** (generator-driven, needs network). Never application logic.
   then go idle with "I'll let you know" — the notification you get is the
   wrapper stopping, not the work finishing. Judge completion by artifacts on
   disk (files + implementation notes), never by wrapper chatter.
+- 2026-07-04: Playwright runs collide on the shared :5173 dev server
+  (strictPort + reuseExistingServer): orchestrator and implementer running
+  the suite concurrently produce phantom flakes and nonsense test counts.
+  Rule: one runner at a time — coordinate via the notes-file STATUS marker;
+  kill stray vite/headless-chromium processes before every E2E run and
+  after every tour.

@@ -66,6 +66,19 @@ export function projectFor(state: GameState, viewer: Viewer): ClientGameView {
     if (viewerPlayer.roleId === "detective") {
       you.investigationResults = state.investigationResults.filter((r) => r.actorId === viewerPlayer.id).map((r) => ({ day: r.day, targetId: r.targetId, isMafia: r.isMafia }));
     }
+    if (viewerPlayer.alive && (role.knowledgeAtStart === "mafia" || role.knowledgeAtStart === "mafia-partners")) {
+      // Role-identity knowledge ("who is on the mafia team"), not a live
+      // action tally — unlike `mafiaKillers` (used for consensus/kill
+      // eligibility), this must not hide entries for absent players, dead
+      // partners, or on a firstNightKill=false night 1.
+      you.mafiaRoster = state.players
+        .filter((p) => p.id !== viewerPlayer.id && getRole(currentRoles(), p.roleId).nightAction?.consensus === "mafia")
+        .map((p) => p.id);
+    }
+    if (viewerPlayer.alive) {
+      const vote = state.votes.find((v) => v.playerId === viewerPlayer.id);
+      if (vote) you.currentVote = vote.target;
+    }
     view.you = you;
   }
   return view;

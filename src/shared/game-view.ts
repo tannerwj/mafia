@@ -49,6 +49,8 @@ export interface ClientGameView {
     investigationResults?: { day: number; targetId: PlayerId; isMafia: boolean }[];
     factionVotes?: { playerId: PlayerId; targetId: PlayerId | null }[];
     consensusReached?: boolean;
+    mafiaRoster?: PlayerId[];
+    currentVote?: VoteTarget;
   };
   votes?: { playerId: PlayerId; target: VoteTarget }[];
   voted?: PlayerId[];

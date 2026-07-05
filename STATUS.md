@@ -201,3 +201,20 @@
   threaded through machine.ts transitions, Date.now() on all DO builders,
   regression tests incl. alarm-driven dawn→day without force_advance.
   Watchdog armed. Dev server left running on :5174 for re-verification.
+
+## 2026-07-04 — SPEC 03 SHIPPED (cb8afac); Spec 04 building
+- Fix round 1 verified: engine 24/24, DO 35/35, E2E 6/6, and the live
+  raw-WS seed-19 game now runs start→finish with auto-advancing dawn/dusk,
+  village win, and rematch retaining all 5 seats.
+- Debugging postscript: the live gate's "rematch lost seats" failure was
+  the ORCHESTRATOR'S harness bug (next() matched stale pre-game lobby
+  snapshots buffered all game — exactly the drain-everything trap the
+  builder's notes warned about). Server was correct; decomposed the delta
+  until every unit was named (token probe proved storage intact) instead of
+  filing a phantom fix round.
+- .dev.vars gitignored; CLAUDE.md role table reworded (implementer agents,
+  never orchestrator — the builder's fair governance flag).
+- spec04-build launched (baseline cb8afac): noir player UI. It will pause
+  "READY FOR INSTALL" for the dependency budget (no network in sandbox) —
+  orchestrator installs zustand/@radix-ui/react-dialog/vaul/sonner/
+  @fontsource-variable/playfair-display then verification proceeds.

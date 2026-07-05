@@ -1,0 +1,75 @@
+// D2: role is shown once at assignment via a Radix Dialog that auto-dismisses
+// after 5s, then stays hidden behind HoldToPeek for the rest of the game.
+// The dialog re-arms whenever `roleId` changes value from what was last
+// auto-shown (covers: fresh join after game start, and — defensively — a
+// role reassignment, though the engine never reassigns roles mid-game).
+import * as Dialog from "@radix-ui/react-dialog";
+import { useEffect, useRef, useState } from "react";
+import HoldToPeek from "./HoldToPeek";
+import { roleCopyFor } from "../lib/roleCopy";
+
+const AUTO_DISMISS_MS = 5000;
+
+function RoleCard({ roleId }: { roleId: string }) {
+  const copy = roleCopyFor(roleId);
+  return (
+    <div className="flex flex-col items-center gap-2 text-center">
+      <p className="text-xs uppercase tracking-[0.3em] text-smoke">
+        Your role
+      </p>
+      <h2 className="font-display text-4xl text-brass">{copy.displayName}</h2>
+      {copy.blurb && <p className="max-w-xs text-sm text-bone/80">{copy.blurb}</p>}
+    </div>
+  );
+}
+
+export default function RoleReveal({ roleId }: { roleId: string }) {
+  const [open, setOpen] = useState(false);
+  const shownForRef = useRef<string | null>(null);
+
+  // Guards against re-arming the auto-dismiss timer on every re-render (the
+  // dialog should only (re)open when `roleId` actually changes value), while
+  // still arming a fresh timer on every real effect run — including React
+  // StrictMode's dev-only mount→cleanup→mount double-invoke, which would
+  // otherwise clear the one-and-only timer on the throwaway first pass and
+  // leave the ref-guard blocking a replacement on the real second pass,
+  // stranding the dialog open forever. The guard only decides whether to
+  // OPEN the dialog; the timer itself is armed unconditionally by every
+  // effect invocation and always cleaned up by that same invocation.
+  useEffect(() => {
+    if (shownForRef.current !== roleId) {
+      shownForRef.current = roleId;
+      setOpen(true);
+    }
+    const timer = setTimeout(() => setOpen(false), AUTO_DISMISS_MS);
+    return () => clearTimeout(timer);
+  }, [roleId]);
+
+  return (
+    <>
+      <Dialog.Root open={open} onOpenChange={setOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-40 bg-ink/90" />
+          <Dialog.Content
+            data-testid="role-reveal-dialog"
+            className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-xs -translate-x-1/2 -translate-y-1/2 rounded-lg border border-smoke bg-ink-2 p-8 shadow-xl"
+          >
+            <Dialog.Title asChild>
+              <span className="sr-only">Your role has been assigned</span>
+            </Dialog.Title>
+            <Dialog.Description asChild>
+              <span className="sr-only">
+                This dialog closes automatically after five seconds.
+              </span>
+            </Dialog.Description>
+            <RoleCard roleId={roleId} />
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <HoldToPeek>
+        <RoleCard roleId={roleId} />
+      </HoldToPeek>
+    </>
+  );
+}

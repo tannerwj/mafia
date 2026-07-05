@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ClientRoomState, ErrorMessage } from "../../shared/protocol";
+import { useEffect, useMemo, useState } from "react";
+import type { ErrorMessage } from "../../shared/protocol";
 import {
   appendSeatBackup,
   getHostKeyBackup,
@@ -10,10 +10,12 @@ import {
   setSessionHostKey,
   setSessionSeat,
 } from "../net/identity";
-import type { Auth, ConnectionStatus } from "../net/RoomConnection";
-import { RoomConnection } from "../net/RoomConnection";
+import { HOUSE_RULESET, testRolesOverride, testSeedOverride } from "../lib/houseRuleset";
+import type { Auth } from "../net/RoomConnection";
+import { useGameStore } from "../store/gameStore";
 import { navigate } from "../useRoute";
 import ConnectionBanner from "./ConnectionBanner";
+import GameScreen from "./game/GameScreen";
 import Lobby from "./Lobby";
 import SeatPicker from "./SeatPicker";
 
@@ -26,10 +28,18 @@ type Phase =
 
 export default function Room({ code }: { code: string }) {
   const [phase, setPhase] = useState<Phase>({ name: "resolving-auth" });
-  const [status, setStatus] = useState<ConnectionStatus>("connecting");
-  const [state, setState] = useState<ClientRoomState | null>(null);
   const [lastError, setLastError] = useState<ErrorMessage | null>(null);
-  const connectionRef = useRef<RoomConnection | null>(null);
+
+  // The store owns the single RoomConnection instance and all game-state
+  // hydration (D3). Room.tsx layers only the auth-resolution/lifecycle
+  // phase machine that already lived here in Spec 01 (picking-seat/kicked/
+  // bad-credential/connected) via `connect()`'s optional lifecycle hooks —
+  // that logic isn't game state, so it stays local component state.
+  const status = useGameStore((s) => s.connection);
+  const state = useGameStore((s) => s.room);
+  const connect = useGameStore((s) => s.connect);
+  const disconnect = useGameStore((s) => s.disconnect);
+  const send = useGameStore((s) => s.send);
 
   // Resolve initial auth: session seat/hostKey > nothing (seat picker offers
   // localStorage backups). This runs once per room code.
@@ -52,22 +62,19 @@ export default function Room({ code }: { code: string }) {
     }
 
     if (auth) {
-      connect(auth);
+      doConnect(auth);
     } else {
       setPhase({ name: "picking-seat" });
     }
 
     return () => {
-      connectionRef.current?.close();
-      connectionRef.current = null;
+      disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
-  function connect(auth: Auth) {
-    connectionRef.current?.close();
-    const conn = new RoomConnection(code, auth, {
-      onStatusChange: setStatus,
+  function doConnect(auth: Auth) {
+    connect(code, auth, {
       onWelcome: (info) => {
         if (info.seatToken) {
           setSessionSeat(code, info.seatToken);
@@ -82,13 +89,9 @@ export default function Room({ code }: { code: string }) {
         if (auth.kind === "host") {
           setSessionHostKey(code, auth.hostKey);
         }
-        setState(info.state);
         setPhase({ name: "connected", isHost: info.isHost });
       },
-      onSnapshot: setState,
-      onKicked: () => {
-        setPhase({ name: "kicked" });
-      },
+      onKicked: () => setPhase({ name: "kicked" }),
       onBadCredential: () => {
         if (auth.kind === "seat") {
           removeSeatBackup(code, auth.seatToken);
@@ -97,20 +100,19 @@ export default function Room({ code }: { code: string }) {
       },
       onError: (err) => setLastError(err),
     });
-    connectionRef.current = conn;
   }
 
   function handleJoinAsNew(name: string) {
-    connect({ kind: "join", name });
+    doConnect({ kind: "join", name });
   }
 
   function handlePickBackup(seatToken: string) {
     setSessionSeat(code, seatToken);
-    connect({ kind: "seat", seatToken });
+    doConnect({ kind: "seat", seatToken });
   }
 
   function handleKick(playerId: string) {
-    connectionRef.current?.send({ type: "kick", playerId });
+    send({ type: "kick", playerId });
   }
 
   function handleCopyLink() {
@@ -118,18 +120,29 @@ export default function Room({ code }: { code: string }) {
     void navigator.clipboard?.writeText(url);
   }
 
+  function handleStartGame() {
+    const seed = testSeedOverride();
+    const roleOverride = testRolesOverride();
+    const ruleset = roleOverride ? { ...HOUSE_RULESET, roles: { ...HOUSE_RULESET.roles, ...roleOverride } } : HOUSE_RULESET;
+    send(
+      seed === undefined
+        ? { type: "start_game", ruleset }
+        : { type: "start_game", ruleset, seed },
+    );
+  }
+
   const backups = useMemo(() => getSeatBackups(code), [code, phase.name]);
 
   if (phase.name === "kicked") {
     return (
-      <main className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-stone-950 p-6 text-stone-100">
+      <main className="safe-top safe-bottom safe-x mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-4 bg-ink p-6 text-bone">
         <p data-testid="kicked-message" className="text-lg">
           You were removed from this room.
         </p>
         <button
           type="button"
           onClick={() => navigate("/")}
-          className="rounded bg-red-800 px-4 py-2 text-stone-50"
+          className="min-h-11 rounded-md bg-blood px-4 py-2 text-bone"
         >
           Back home
         </button>
@@ -147,7 +160,7 @@ export default function Room({ code }: { code: string }) {
           onJoinAsNew={handleJoinAsNew}
         />
         {lastError && (
-          <p data-testid="room-error" className="p-2 text-center text-sm text-red-400">
+          <p data-testid="room-error" className="p-2 text-center text-sm text-blood">
             {lastError.message}
           </p>
         )}
@@ -159,18 +172,27 @@ export default function Room({ code }: { code: string }) {
     return (
       <>
         <ConnectionBanner status={status} />
-        <Lobby
-          state={state}
-          isHost={phase.isHost}
-          onKick={handleKick}
-          onCopyLink={handleCopyLink}
-        />
+        {state.game === null ? (
+          <Lobby
+            state={state}
+            isHost={phase.isHost}
+            onKick={handleKick}
+            onCopyLink={handleCopyLink}
+            onStartGame={handleStartGame}
+          />
+        ) : (
+          <GameScreen
+            game={state.game}
+            players={state.players}
+            isHost={phase.isHost}
+          />
+        )}
       </>
     );
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-stone-950 text-stone-100">
+    <main className="flex min-h-dvh items-center justify-center bg-ink text-bone">
       <p>Connecting…</p>
     </main>
   );

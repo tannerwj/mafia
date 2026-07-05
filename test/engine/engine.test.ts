@@ -377,4 +377,55 @@ describe("engine core", () => {
     expectJoinOrder(s, { kind: "player", id: villager.id });
     expectJoinOrder(s, { kind: "public" });
   });
+
+  test("projection: you.mafiaRoster is present for living minion and mafia, absent for villager/detective, and unaffected by dead god view", () => {
+    let s = start(5, rules({ mafia: 2, minion: 1, villager: 2 }, { firstNightKill: false }), 2);
+    const mafiaPlayers = s.players.filter((p) => p.roleId === "mafia");
+    const minion = byRole(s, "minion");
+    const villager = byRole(s, "villager");
+    const detective = s.players.find((p) => p.roleId === "detective");
+    expect(detective).toBeUndefined();
+
+    const minionView = projectFor(s, { kind: "player", id: minion.id });
+    expect(minionView.you?.mafiaRoster?.sort()).toEqual(mafiaPlayers.map((p) => p.id).sort());
+
+    for (const mafiaPlayer of mafiaPlayers) {
+      const view = projectFor(s, { kind: "player", id: mafiaPlayer.id });
+      const expectedPartners = mafiaPlayers.filter((p) => p.id !== mafiaPlayer.id).map((p) => p.id);
+      expect(view.you?.mafiaRoster?.sort()).toEqual(expectedPartners.sort());
+    }
+
+    const villagerView = projectFor(s, { kind: "player", id: villager.id });
+    expect(villagerView.you).not.toHaveProperty("mafiaRoster");
+
+    // Dead god view (host/dead/ended) already gets full roles via `players[]`
+    // — mafiaRoster is a living-viewer knowledge grant, not a god-view field.
+    const deadState = { ...s, players: s.players.map((p) => (p.id === villager.id ? { ...p, alive: false } : p)) };
+    const deadVillagerView = projectFor(deadState, { kind: "player", id: villager.id });
+    expect(deadVillagerView.you).not.toHaveProperty("mafiaRoster");
+  });
+
+  test("projection: you.currentVote reflects the viewer's own standing vote regardless of votingVisibility, hidden or realtime", () => {
+    for (const votingVisibility of ["hidden", "realtime"] as const) {
+      let s = toDay(start(5, rules({ mafia: 1, detective: 1, angel: 1, villager: 2 }, { votingVisibility }), 9));
+      const villager = byRole(s, "villager");
+      const other = living(s).find((p) => p.id !== villager.id)!;
+
+      expect(projectFor(s, { kind: "player", id: villager.id }).you?.currentVote).toBeUndefined();
+
+      s = applyCommand(s, { type: "castVote", playerId: villager.id, target: other.id }).state;
+      expect(projectFor(s, { kind: "player", id: villager.id }).you?.currentVote).toBe(other.id);
+
+      s = applyCommand(s, { type: "castVote", playerId: villager.id, target: "no_murder" }).state;
+      expect(projectFor(s, { kind: "player", id: villager.id }).you?.currentVote).toBe("no_murder");
+
+      // Not the voter's own view: hidden mode must still say nothing about
+      // this or other players' votes beyond what `voted`/`votes` already gave.
+      const otherView = projectFor(s, { kind: "player", id: other.id });
+      expect(otherView.you?.currentVote).toBeUndefined();
+
+      s = applyCommand(s, { type: "retractVote", playerId: villager.id }).state;
+      expect(projectFor(s, { kind: "player", id: villager.id }).you?.currentVote).toBeUndefined();
+    }
+  });
 });

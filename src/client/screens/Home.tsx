@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Button } from "../components/ui/button";
 import { navigate } from "../useRoute";
 
 export default function Home() {
@@ -40,21 +41,33 @@ export default function Home() {
   }
 
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center gap-8 bg-stone-950 p-6 text-stone-100">
-      <h1 className="font-serif text-4xl text-red-800">Mafia</h1>
+    <main className="safe-top safe-bottom safe-x mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-10 bg-ink p-6 text-bone">
+      <div className="flex flex-col items-center gap-2">
+        <h1 className="font-display text-5xl text-blood">Mafia</h1>
+        <p className="text-sm text-smoke">a silent game for a loud table</p>
+      </div>
 
-      <button
-        type="button"
+      <Button
         onClick={createRoom}
         disabled={creating}
         data-testid="create-room"
-        className="rounded bg-red-800 px-6 py-3 text-lg font-semibold text-stone-50 disabled:opacity-50"
+        size="lg"
+        className="w-full max-w-xs"
       >
         {creating ? "Creating…" : "Create room"}
-      </button>
+      </Button>
 
-      <form onSubmit={joinRoom} className="flex flex-col items-center gap-3">
-        <label htmlFor="join-code" className="text-sm text-stone-300">
+      <div className="flex w-full max-w-xs items-center gap-3 text-smoke">
+        <div className="h-px flex-1 bg-smoke/40" />
+        <span className="text-xs uppercase tracking-widest">or</span>
+        <div className="h-px flex-1 bg-smoke/40" />
+      </div>
+
+      <form
+        onSubmit={joinRoom}
+        className="flex w-full max-w-xs flex-col items-center gap-3"
+      >
+        <label htmlFor="join-code" className="text-sm text-smoke">
           Have a room code?
         </label>
         <input
@@ -64,19 +77,20 @@ export default function Home() {
           onChange={(e) => setJoinCode(e.target.value)}
           maxLength={5}
           placeholder="ABCDE"
-          className="w-32 rounded bg-stone-800 px-3 py-2 text-center text-xl uppercase tracking-widest text-stone-50"
+          className="h-12 w-full rounded-md border border-smoke bg-ink-2 px-3 text-center text-xl uppercase tracking-widest text-bone placeholder:text-smoke focus:border-brass focus:outline-none"
         />
-        <button
+        <Button
           type="submit"
           data-testid="join-room"
-          className="rounded border border-stone-600 px-4 py-2 text-stone-100"
+          variant="outline"
+          className="w-full"
         >
           Go to room
-        </button>
+        </Button>
       </form>
 
       {error && (
-        <p data-testid="home-error" className="text-sm text-red-400">
+        <p data-testid="home-error" className="text-sm text-blood">
           {error}
         </p>
       )}

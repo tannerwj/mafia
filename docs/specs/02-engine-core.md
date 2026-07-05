@@ -1,6 +1,14 @@
 # Spec 02 — Game engine core (pure TS)
 
-**v2.5 — 2026-07-04 · Status: approved for build**
+**v2.6 — 2026-07-04 · Status: approved for build**
+*v2.6 (Spec 04 build fallout — two projection-contract gaps found by the UI
+implementer): `you.mafiaRoster?: {id, name?}[] → PlayerId[]` present for
+living MINION viewers (the role's entire ability; "minion sees mafia" was a
+knowledge grant with no pinned field) and for mafia viewers (their partner
+knowledge, complementing live factionVotes). `you.currentVote?: VoteTarget`
+— your OWN standing vote, present for every living viewer regardless of
+votingVisibility (hidden mode hides others' votes, never your own; fixes
+the hard-reload-mid-vote restore gap).*
 *v2.5 (build fallout — implementer caught a real signature gap):
 `startGame(players, ruleset, seed, now, roles?)` — `now` (epoch ms) lets a
 configured night-1 timer emit its setDeadline effect at start; `roles`
