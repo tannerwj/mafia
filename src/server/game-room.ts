@@ -281,6 +281,20 @@ export class GameRoom extends DurableObject<Env> {
           now: Date.now(),
         }));
         return;
+      case "lock_action":
+        await this.handleGameCommand(ws, attachment, (playerId) => ({
+          type: "lockAction",
+          playerId,
+          now: Date.now(),
+        }));
+        return;
+      case "unlock_action":
+        await this.handleGameCommand(ws, attachment, (playerId) => ({
+          type: "unlockAction",
+          playerId,
+          now: Date.now(),
+        }));
+        return;
       case "force_advance":
         await this.handleHostGameCommand(ws, attachment, {
           type: "forceAdvance",

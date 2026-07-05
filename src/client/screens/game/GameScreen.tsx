@@ -14,6 +14,8 @@ import GameEnd from "./GameEnd";
 import Interstitial from "./Interstitial";
 import NightActionDrawer from "./NightActionDrawer";
 import RoleReveal from "../../components/RoleReveal";
+import MyRoleButton from "../../components/MyRoleButton";
+import HelpButton from "../../components/HelpButton";
 
 // The visible transition is "fade out, swap tint, fade in" — two sequential
 // CSS opacity transitions (removing `data-tint="fading"` is itself an
@@ -90,6 +92,14 @@ export default function GameScreen({
       data-tint={fading ? "fading" : tint}
     >
       {you && <RoleReveal roleId={you.roleId ?? ""} />}
+      {you?.roleId && (
+        <MyRoleButton
+          roleId={you.roleId}
+          mafiaRoster={you.mafiaRoster}
+          playerNames={new Map(players.map((p) => [p.id, p.name]))}
+        />
+      )}
+      <HelpButton className="fixed bottom-3 right-3 z-60 flex h-11 w-11 items-center justify-center rounded-full border-2 border-smoke bg-ink-2 text-lg text-bone shadow-lg safe-bottom safe-x" />
 
       {game.phase === "ended" ? (
         <GameEnd game={game} players={players} isHost={isHost} />

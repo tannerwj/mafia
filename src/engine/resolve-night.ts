@@ -1,5 +1,6 @@
 import { ATTACK_RANK, DEFENSE_RANK, type DefenseTier, type GameEvent, type GameState, type SubmittedAction } from "./types";
 import { getRole, mafiaKillers, roleOrder, type RoleRegistry } from "./roles";
+import { resolveConsensus, resolveLockedPlurality } from "./consensus";
 
 function defenseMax(a: DefenseTier, b: DefenseTier): DefenseTier {
   return DEFENSE_RANK[a] >= DEFENSE_RANK[b] ? a : b;
@@ -9,38 +10,29 @@ function submitted(state: GameState, actorId: string, type?: string): SubmittedA
   return state.nightActions.find((a) => a.actorId === actorId && (!type || a.actionType === type));
 }
 
-export function resolveMafiaTarget(state: GameState, registry: RoleRegistry): { actorId: string; targetId: string } | null {
+/**
+ * `forced`: false (default) for the natural zero-pending-input advance —
+ * resolves via the ruleset's own consensus mode (`resolveConsensus`'s
+ * `converged` target; unanimous disagreement yields no kill even though
+ * this is only reachable once all killers are locked, since machine.ts's
+ * readiness gate wouldn't have allowed the phase to advance naturally on a
+ * disagreement). `forced: true` is the force-advance/timerExpired fallback
+ * (Spec 08 amends Spec 02 v2.3): resolves strictly from LOCKED votes by
+ * plurality regardless of mode or convergence — this is what lets a host
+ * break a unanimous-mode deadlock or an under-locked majority/designated
+ * group.
+ */
+export function resolveMafiaTarget(state: GameState, registry: RoleRegistry, forced = false): { actorId: string; targetId: string } | null {
   const killers = mafiaKillers(state, registry);
-  if (killers.length === 0) return null;
-  const votes = state.mafiaVotes.filter((v) => killers.some((p) => p.id === v.playerId) && v.targetId);
-  if (votes.length === 0) return null;
-  const counts = new Map<string, number>();
-  for (const vote of votes) counts.set(vote.targetId!, (counts.get(vote.targetId!) ?? 0) + 1);
-  const denom = killers.length;
-  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1] || seatOf(state, a[0]) - seatOf(state, b[0]));
-  const top = sorted[0]!;
-  const converged =
-    state.ruleset.mafiaConsensus === "designated"
-      ? votes.some((v) => v.playerId === killers.sort((a, b) => a.seat - b.seat)[0]!.id)
-      : state.ruleset.mafiaConsensus === "unanimous"
-        ? top[1] === denom
-        : top[1] > denom / 2;
-  if (converged) {
-    if (state.ruleset.mafiaConsensus === "designated") {
-      const designated = killers.sort((a, b) => a.seat - b.seat)[0]!;
-      const vote = votes.find((v) => v.playerId === designated.id);
-      return vote?.targetId ? { actorId: designated.id, targetId: vote.targetId } : null;
-    }
-    return { actorId: votes.find((v) => v.targetId === top[0])!.playerId, targetId: top[0] };
-  }
-  return { actorId: votes.find((v) => v.targetId === top[0])!.playerId, targetId: top[0] };
+  if (forced) return resolveLockedPlurality(state.mafiaVotes, killers);
+  return resolveConsensus(state.mafiaVotes, killers, state.ruleset.mafiaConsensus, { lockedOnly: true }).target;
 }
 
 function seatOf(state: GameState, playerId: string): number {
   return state.players.find((p) => p.id === playerId)?.seat ?? 9999;
 }
 
-export function resolveNight(input: GameState, registry: RoleRegistry): GameState {
+export function resolveNight(input: GameState, registry: RoleRegistry, forced = false): GameState {
   const state: GameState = { ...input, log: [...input.log], deaths: [...input.deaths], investigationResults: [...input.investigationResults] };
   const events: GameEvent[] = [];
   const blocked = new Set<string>();
@@ -68,7 +60,7 @@ export function resolveNight(input: GameState, registry: RoleRegistry): GameStat
   }
 
   const killAttempts: { actorId: string; targetId: string; attack: "basic" | "powerful" | "unstoppable" }[] = [];
-  const mafiaTarget = resolveMafiaTarget(state, registry);
+  const mafiaTarget = resolveMafiaTarget(state, registry, forced);
   if (mafiaTarget && !blocked.has(mafiaTarget.actorId)) killAttempts.push({ ...mafiaTarget, attack: "basic" });
   for (const action of state.nightActions.filter((a) => a.actionType === "kill" && a.targetId)) {
     if (!blocked.has(action.actorId)) {

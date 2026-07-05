@@ -1,5 +1,6 @@
 import type { ClientGameView, Viewer } from "../shared/game-view";
 import { activeNightActionFor, canSubmitMafiaVote, currentRoles, getRole, mafiaKillers } from "./roles";
+import { resolveConsensus } from "./consensus";
 import type { GameEvent, GameState } from "./types";
 
 function revealForPublic(state: GameState, playerId: string) {
@@ -27,7 +28,9 @@ function resolvedLog(state: GameState, god: boolean): GameEvent[] {
 // living, non-absent mafia-consensus killer (`canSubmitMafiaVote`).
 // Non-actors (villager/minion/bomber-style roles, or a dead/absent seat with
 // no owed action) get `undefined` — never a fabricated `false` — so the host
-// table can render "asleep"/"—" instead of a false "pending".
+// table can render "asleep"/"—" instead of a false "pending". Spec 08 v2.8
+// amends the mafia branch: a killer counts as `acted` only once LOCKED (a
+// tentative pick is still pending) — non-mafia actors are unaffected.
 function actedThisNight(state: GameState, playerId: string): boolean | undefined {
   const registry = currentRoles();
   const spec = activeNightActionFor(state, registry, playerId);
@@ -36,21 +39,9 @@ function actedThisNight(state: GameState, playerId: string): boolean | undefined
   }
   if (canSubmitMafiaVote(state, registry, playerId)) {
     const vote = state.mafiaVotes.find((v) => v.playerId === playerId);
-    return !!vote && vote.targetId !== null;
+    return !!vote && vote.targetId !== null && vote.locked;
   }
   return undefined;
-}
-
-function consensusReached(state: GameState): boolean {
-  const killers = mafiaKillers(state, currentRoles());
-  if (killers.length === 0) return true;
-  const votes = state.mafiaVotes.filter((v) => killers.some((p) => p.id === v.playerId) && v.targetId);
-  if (votes.length === 0) return false;
-  if (state.ruleset.mafiaConsensus === "designated") return votes.some((v) => v.playerId === killers.sort((a, b) => a.seat - b.seat)[0]!.id);
-  const counts = new Map<string, number>();
-  for (const vote of votes) counts.set(vote.targetId!, (counts.get(vote.targetId!) ?? 0) + 1);
-  const top = Math.max(...counts.values());
-  return state.ruleset.mafiaConsensus === "unanimous" ? top === killers.length : top > killers.length / 2;
 }
 
 export function projectFor(state: GameState, viewer: Viewer): ClientGameView {
@@ -91,9 +82,26 @@ export function projectFor(state: GameState, viewer: Viewer): ClientGameView {
     const mafiaVote = state.mafiaVotes.find((v) => v.playerId === viewerPlayer.id);
     if (pending) you.pendingAction = { actionType: pending.actionType, targetId: pending.targetId };
     if (mafiaVote) you.pendingAction = { actionType: "mafiaKill", targetId: mafiaVote.targetId };
-    if (role.nightAction?.consensus === "mafia" && state.phase === "night") {
-      you.factionVotes = state.mafiaVotes.filter((v) => mafiaKillers(state, currentRoles()).some((p) => p.id === v.playerId));
-      you.consensusReached = consensusReached(state);
+    // `viewerPlayer.alive` guard: a dead ex-mafia's god view is
+    // resolved-only (Spec 02 v2.2) — this field must not leak live
+    // teammate tentative/locked picks for the still-unresolved current
+    // night to a player who is now dead (their own re-projection after
+    // death still carries `roleId: "mafia"`, so the role/phase check alone
+    // is not sufficient).
+    if (viewerPlayer.alive && role.nightAction?.consensus === "mafia" && state.phase === "night") {
+      const killers = mafiaKillers(state, currentRoles());
+      // Spec 08 (amends v2.6, BREAKING shape): covers ALL living non-absent
+      // killers, undecided -> targetId null, not just those who've already
+      // picked — `factionVotes.length` is the killer count now, never a
+      // picked-count proxy. `voterId` (renamed from `playerId`) per the pin.
+      you.factionVotes = killers.map((k) => {
+        const vote = state.mafiaVotes.find((v) => v.playerId === k.id);
+        return { voterId: k.id, targetId: vote?.targetId ?? null, locked: vote?.locked ?? false };
+      });
+      you.lockedCount = you.factionVotes.filter((v) => v.locked).length;
+      // Redefined (Spec 08): true iff all relevant killers are locked AND
+      // the ruleset's consensus rule is satisfied.
+      you.consensusReached = resolveConsensus(state.mafiaVotes, killers, state.ruleset.mafiaConsensus, { lockedOnly: true }).converged;
     }
     if (viewerPlayer.roleId === "detective") {
       you.investigationResults = state.investigationResults.filter((r) => r.actorId === viewerPlayer.id).map((r) => ({ day: r.day, targetId: r.targetId, isMafia: r.isMafia }));

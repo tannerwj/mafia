@@ -8,6 +8,7 @@ import type { ClientGameView } from "../../../shared/game-view";
 import type { ClientRoomState } from "../../../shared/protocol";
 import { Button } from "../../components/ui/button";
 import ConfirmDialog from "../../components/ConfirmDialog";
+import HelpButton from "../../components/HelpButton";
 import { forceAdvance, markAbsent, markPresent } from "../../store/gameStore";
 import { forceAdvanceCopy, hostSeatRows, phaseLabel, phaseSummary } from "../../store/hostView";
 import DeadlineCountdown from "./DeadlineCountdown";
@@ -92,7 +93,10 @@ export default function HostGame({ room, game }: { room: ClientRoomState; game: 
     <main className="safe-top safe-bottom safe-x mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-4 bg-ink p-4 text-bone">
       <div className="flex items-center justify-between gap-2">
         <h1 className="font-display text-2xl text-blood">Host console</h1>
-        <PrivacyChip />
+        <div className="flex items-center gap-2">
+          <HelpButton />
+          <PrivacyChip />
+        </div>
       </div>
 
       <PhaseHeader game={game} rows={rows} />

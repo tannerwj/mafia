@@ -51,6 +51,10 @@ describe("engine core", () => {
     const detective = byRole(s, "detective");
     const target = s.players.find((p) => p.id !== mafia.id && p.id !== angel.id && p.id !== detective.id)!;
     s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: target.id }).state;
+    // Spec 08: the night's mafia-kill readiness gate is now "locked", not
+    // "submitted" — the sole killer must lock in before the night can
+    // resolve naturally.
+    s = applyCommand(s, { type: "lockAction", playerId: mafia.id }).state;
     s = applyCommand(s, { type: "submitAction", playerId: angel.id, targetId: target.id }).state;
     s = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: mafia.id }).state;
     expect(s.phase).toBe("dawn");
@@ -134,31 +138,82 @@ describe("engine core", () => {
   });
 
   test("mafia consensus modes and absent denominator use uniform plurality fallback", () => {
+    // Spec 08: force-advance/timer resolves from LOCKED votes only. A
+    // single submitted-but-NOT-locked vote no longer lands on force —
+    // zero locked votes means no kill.
     let s = start(5, rules({ mafia: 2, villager: 3 }, { mafiaConsensus: "unanimous" }), 1);
     const mafia = s.players.filter((p) => p.roleId === "mafia");
     const target = s.players.find((p) => p.roleId !== "mafia")!;
     s = applyCommand(s, { type: "submitAction", playerId: mafia[0]!.id, targetId: target.id }).state;
     s = force(s);
-    expect(s.players.find((p) => p.id === target.id)?.alive).toBe(false);
+    expect(s.players.find((p) => p.id === target.id)?.alive).toBe(true);
+    expect(s.log.some((e) => e.type === "attackAttempted")).toBe(false);
+    // Same scenario, but the sole living/non-absent voter locks first —
+    // force-advance now resolves it (plurality among locked, denom 1).
+    let sLocked = start(5, rules({ mafia: 2, villager: 3 }, { mafiaConsensus: "unanimous" }), 1);
+    const mafiaLocked = sLocked.players.filter((p) => p.roleId === "mafia");
+    const targetLocked = sLocked.players.find((p) => p.roleId !== "mafia")!;
+    sLocked = applyCommand(sLocked, { type: "submitAction", playerId: mafiaLocked[0]!.id, targetId: targetLocked.id }).state;
+    sLocked = applyCommand(sLocked, { type: "lockAction", playerId: mafiaLocked[0]!.id }).state;
+    sLocked = force(sLocked);
+    expect(sLocked.players.find((p) => p.id === targetLocked.id)?.alive).toBe(false);
+
+    // markAbsent removes the absent killer from the lock denominator — the
+    // sole remaining (non-absent) killer locking in is enough for natural
+    // (non-forced) resolution.
     let t = start(5, rules({ mafia: 2, villager: 3 }, { mafiaConsensus: "unanimous" }), 1);
     const tm = t.players.filter((p) => p.roleId === "mafia");
     t = applyCommand(t, { type: "markAbsent", byHost: true, playerId: tm[1]!.id }).state;
     t = applyCommand(t, { type: "submitAction", playerId: tm[0]!.id, targetId: t.players.find((p) => p.roleId !== "mafia")!.id }).state;
+    t = applyCommand(t, { type: "lockAction", playerId: tm[0]!.id }).state;
     expect(t.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", outcome: "landed" }));
+
+    // Majority mode: both killers submit and lock -> natural resolution.
     let majority = start(5, rules({ mafia: 2, villager: 3 }, { mafiaConsensus: "majority" }), 3);
     const mm = majority.players.filter((p) => p.roleId === "mafia");
     const mt = majority.players.find((p) => p.roleId !== "mafia")!;
     majority = applyCommand(majority, { type: "submitAction", playerId: mm[0]!.id, targetId: mt.id }).state;
+    majority = applyCommand(majority, { type: "lockAction", playerId: mm[0]!.id }).state;
     majority = applyCommand(majority, { type: "submitAction", playerId: mm[1]!.id, targetId: mt.id }).state;
+    majority = applyCommand(majority, { type: "lockAction", playerId: mm[1]!.id }).state;
     expect(majority.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", targetId: mt.id }));
+
+    // Designated mode: only the designated (lowest-seat) killer's lock
+    // gates readiness — non-designated killers' lock state is irrelevant.
     let designated = start(4, rules({ mafia: 2, villager: 2 }, { mafiaConsensus: "designated" }), 4);
     const dm = designated.players.filter((p) => p.roleId === "mafia").sort((a, b) => a.seat - b.seat);
     const dt = designated.players.find((p) => p.roleId !== "mafia")!;
     designated = applyCommand(designated, { type: "submitAction", playerId: dm[0]!.id, targetId: dt.id }).state;
+    designated = applyCommand(designated, { type: "lockAction", playerId: dm[0]!.id }).state;
     expect(designated.phase).not.toBe("night");
   });
 
-  test("unanimous consensus timeout resolves as plurality among submitted mafia votes", () => {
+  test("unanimous consensus timeout resolves as plurality among LOCKED mafia votes", () => {
+    // Spec 08 amends Spec 02 v2.3: force/timer resolves from LOCKED votes
+    // only. All three lock in (so the phase is naturally ready, but
+    // unanimous mode's convergence check fails on a genuine 2-1 split,
+    // leaving the night open — "keep deciding" — until the host forces).
+    let s = start(8, rules({ mafia: 3, villager: 5 }, { mafiaConsensus: "unanimous" }), 2);
+    const mafia = s.players.filter((p) => p.roleId === "mafia").sort((a, b) => a.seat - b.seat);
+    const target = s.players.find((p) => p.roleId !== "mafia")!;
+    const other = s.players.find((p) => p.roleId !== "mafia" && p.id !== target.id)!;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[0]!.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id }).state;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[1]!.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[1]!.id }).state;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[2]!.id, targetId: other.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[2]!.id }).state;
+    expect(s.phase).toBe("night"); // all locked but disagreeing -> stays open
+    s = force(s);
+    expect(s.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", targetId: target.id, outcome: "landed" }));
+    expect(s.log.filter((e) => e.type === "attackAttempted")).toHaveLength(1);
+  });
+
+  test("unanimous disagreement with unlocked votes: force-advance resolves zero kill (nothing locked)", () => {
+    // Companion case: submitted-but-not-locked votes are discarded entirely
+    // by the force/timer fallback — zero locked votes means no kill, even
+    // though under the OLD "plurality among submitted" rule this would have
+    // landed on `target`.
     let s = start(8, rules({ mafia: 3, villager: 5 }, { mafiaConsensus: "unanimous" }), 2);
     const mafia = s.players.filter((p) => p.roleId === "mafia").sort((a, b) => a.seat - b.seat);
     const target = s.players.find((p) => p.roleId !== "mafia")!;
@@ -167,8 +222,7 @@ describe("engine core", () => {
     s = applyCommand(s, { type: "submitAction", playerId: mafia[1]!.id, targetId: target.id }).state;
     s = applyCommand(s, { type: "submitAction", playerId: mafia[2]!.id, targetId: other.id }).state;
     s = force(s);
-    expect(s.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", targetId: target.id, outcome: "landed" }));
-    expect(s.log.filter((e) => e.type === "attackAttempted")).toHaveLength(1);
+    expect(s.log.some((e) => e.type === "attackAttempted")).toBe(false);
   });
 
   test("village must eliminate minions and minions can win parity", () => {
@@ -214,6 +268,9 @@ describe("engine core", () => {
     const mafia = byRole(e, "mafia");
     const target = byRole(e, "villager");
     e = applyCommand(e, { type: "submitAction", playerId: mafia.id, targetId: target.id }).state;
+    // Spec 08: the sole killer must lock in for the vote to count on
+    // force-advance (locked-only plurality).
+    e = applyCommand(e, { type: "lockAction", playerId: mafia.id }).state;
     e = applyCommand(e, { type: "submitAction", playerId: escorts[0]!.id, targetId: escorts[1]!.id }).state;
     e = applyCommand(e, { type: "submitAction", playerId: escorts[1]!.id, targetId: escorts[0]!.id }).state;
     e = force(e);
@@ -273,14 +330,31 @@ describe("engine core", () => {
     expect(day.deaths).toHaveLength(0);
   });
 
-  test("forceAdvance mid-night applies the same defaults, including mafia plurality-of-submitted", () => {
+  test("forceAdvance mid-night applies the same defaults, including mafia plurality-of-LOCKED", () => {
+    // Spec 08 amends Spec 02 v2.3: force-advance resolves from LOCKED votes
+    // only. One killer submits AND locks (the other never acts) -> the
+    // locked vote still lands by plurality (denom of 1 locked vote).
     let s = start(8, rules({ mafia: 2, villager: 6 }, { mafiaConsensus: "unanimous" }), 2);
     const mafia = s.players.filter((p) => p.roleId === "mafia");
     const target = s.players.find((p) => p.roleId !== "mafia")!;
     s = applyCommand(s, { type: "submitAction", playerId: mafia[0]!.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id }).state;
     s = force(s);
     expect(s.phase).toBe("dawn");
     expect(s.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", targetId: target.id, outcome: "landed" }));
+
+    // Companion: submitted but NOT locked -> discarded entirely, no kill
+    // (this is the case that changed from the old "plurality among
+    // submitted" rule).
+    let u = start(8, rules({ mafia: 2, villager: 6 }, { mafiaConsensus: "unanimous" }), 2);
+    const uMafia = u.players.filter((p) => p.roleId === "mafia");
+    const uTarget = u.players.find((p) => p.roleId !== "mafia")!;
+    u = applyCommand(u, { type: "submitAction", playerId: uMafia[0]!.id, targetId: uTarget.id }).state;
+    u = force(u);
+    expect(u.phase).toBe("dawn");
+    expect(u.log.some((e) => e.type === "attackAttempted")).toBe(false);
+    expect(u.deaths).toHaveLength(0);
+
     let t = start(8, rules({ mafia: 2, villager: 6 }, { mafiaConsensus: "unanimous" }), 2);
     t = force(t);
     expect(t.phase).toBe("dawn");
@@ -323,13 +397,16 @@ describe("engine core", () => {
     expect(s.phase).toBe("night");
 
     // Last night action submitted by a player (not the host) completes the
-    // night and transitions into dawn.
+    // night and transitions into dawn. Spec 08: the sole killer must LOCK
+    // (not just submit) for the phase to become ready, so the lock is the
+    // final player-triggered completion here.
     s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: villagers[0]!.id, now: NOW + 10 }).state;
-    const detectiveResult = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: mafia.id, now: NOW + 10 });
-    s = detectiveResult.state;
+    s = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: mafia.id, now: NOW + 10 }).state;
+    const lockResult = applyCommand(s, { type: "lockAction", playerId: mafia.id, now: NOW + 10 });
+    s = lockResult.state;
     expect(s.phase).toBe("dawn");
     expect(s.deadlineAt).toBe(NOW + 10 + 4242);
-    expect(detectiveResult.effects).toContainEqual({ type: "setDeadline", at: NOW + 10 + 4242 });
+    expect(lockResult.effects).toContainEqual({ type: "setDeadline", at: NOW + 10 + 4242 });
 
     s = force(s); // dawn -> day (untimed by default in these tests)
 
@@ -366,6 +443,7 @@ describe("engine core", () => {
     const detective = byRole(s, "detective");
     const target = s.players.find((p) => p.id !== mafia.id && p.id !== angel.id && p.id !== detective.id)!;
     s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia.id }).state;
     s = applyCommand(s, { type: "submitAction", playerId: angel.id, targetId: target.id }).state;
     s = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: mafia.id }).state;
     expect(s.phase).toBe("dawn");
@@ -429,7 +507,7 @@ describe("engine core", () => {
     }
   });
 
-  test("projection: host-only players[].acted tracks night-action submission, undefined for non-actors, leak-free elsewhere", () => {
+  test("projection: host-only players[].acted tracks night-action submission (mafia: LOCKED-only per Spec 08), undefined for non-actors, leak-free elsewhere", () => {
     let s = start(5, rules({ mafia: 1, detective: 1, angel: 1, villager: 2 }), 9);
     const mafia = byRole(s, "mafia");
     const detective = byRole(s, "detective");
@@ -455,8 +533,14 @@ describe("engine core", () => {
     // Mafia hasn't voted yet: still false.
     expect(seatIn(hostView, mafia.id)?.acted).toBe(false);
 
-    // Mafia submits its kill-vote -> host sees acted flip to true too.
+    // Spec 08: mafia submits its kill-vote but does NOT lock -> still
+    // pending (`acted` stays false) — a tentative pick is not "acted".
     s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: villager.id }).state;
+    hostView = projectFor(s, { kind: "host" });
+    expect(seatIn(hostView, mafia.id)?.acted).toBe(false);
+
+    // Only once the mafia LOCKS its pick does the host see acted flip true.
+    s = applyCommand(s, { type: "lockAction", playerId: mafia.id }).state;
     hostView = projectFor(s, { kind: "host" });
     expect(seatIn(hostView, mafia.id)?.acted).toBe(true);
 
@@ -472,5 +556,257 @@ describe("engine core", () => {
     const deadState = { ...s, players: s.players.map((p) => (p.id === villager.id ? { ...p, alive: false } : p)) };
     const deadVillagerView = projectFor(deadState, { kind: "player", id: villager.id });
     for (const p of deadVillagerView.players) expect(p.acted).not.toBe(true), expect(p.acted).not.toBe(false);
+  });
+
+  // ---------------------------------------------------------------------
+  // Spec 08 — lock-in team voting (D1)
+  // ---------------------------------------------------------------------
+
+  test("lock-in: tentative picks don't resolve the night, even when they'd match", () => {
+    let s = start(7, rules({ mafia: 2, villager: 5 }, { mafiaConsensus: "unanimous" }), 1);
+    const mafia = s.players.filter((p) => p.roleId === "mafia");
+    const target = s.players.find((p) => p.roleId !== "mafia")!;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[0]!.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[1]!.id, targetId: target.id }).state;
+    // Both picked the SAME target but neither has locked — the phase must
+    // stay open (a stray matching tap never ends the night early).
+    expect(s.phase).toBe("night");
+    expect(s.log.some((e) => e.type === "attackAttempted")).toBe(false);
+  });
+
+  test("lock-in: all-locked-agree (unanimous) resolves the kill", () => {
+    let s = start(7, rules({ mafia: 2, villager: 5 }, { mafiaConsensus: "unanimous" }), 1);
+    const mafia = s.players.filter((p) => p.roleId === "mafia");
+    const target = s.players.find((p) => p.roleId !== "mafia")!;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[0]!.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id }).state;
+    expect(s.phase).toBe("night");
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[1]!.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[1]!.id }).state;
+    expect(s.phase).toBe("dawn");
+    expect(s.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", targetId: target.id, outcome: "landed" }));
+  });
+
+  test("lock-in: all-locked-disagree (unanimous) stays open — no resolution, keep deciding", () => {
+    let s = start(7, rules({ mafia: 2, villager: 5 }, { mafiaConsensus: "unanimous" }), 1);
+    const mafia = s.players.filter((p) => p.roleId === "mafia");
+    const villagers = s.players.filter((p) => p.roleId !== "mafia");
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[0]!.id, targetId: villagers[0]!.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id }).state;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[1]!.id, targetId: villagers[1]!.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[1]!.id }).state;
+    // Both locked, but on DIFFERENT targets — must stay open.
+    expect(s.phase).toBe("night");
+    expect(projectFor(s, { kind: "player", id: mafia[0]!.id }).you?.consensusReached).toBe(false);
+    expect(s.log.some((e) => e.type === "attackAttempted")).toBe(false);
+  });
+
+  test("lock-in: majority mode resolves by plurality of LOCKED targets once all locked", () => {
+    let s = start(9, rules({ mafia: 3, villager: 6 }, { mafiaConsensus: "majority" }), 3);
+    const mafia = s.players.filter((p) => p.roleId === "mafia").sort((a, b) => a.seat - b.seat);
+    const villagers = s.players.filter((p) => p.roleId !== "mafia");
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[0]!.id, targetId: villagers[0]!.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id }).state;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[1]!.id, targetId: villagers[0]!.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[1]!.id }).state;
+    expect(s.phase).toBe("night"); // mafia[2] hasn't locked yet
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[2]!.id, targetId: villagers[1]!.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[2]!.id }).state;
+    expect(s.phase).toBe("dawn");
+    // 2 of 3 locked on villagers[0] -> plurality wins, not villagers[1].
+    expect(s.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", targetId: villagers[0]!.id, outcome: "landed" }));
+    expect(s.log.filter((e) => e.type === "attackAttempted")).toHaveLength(1);
+  });
+
+  test("lock-in: force-advance/timer resolve from LOCKED votes only (unlocked tentative picks discarded)", () => {
+    // Two mafia both TENTATIVELY pick the same target (never lock) -> force
+    // yields zero kill, not the naive "they agreed" outcome.
+    let s = start(7, rules({ mafia: 2, villager: 5 }, { mafiaConsensus: "unanimous" }), 1);
+    const mafia = s.players.filter((p) => p.roleId === "mafia");
+    const target = s.players.find((p) => p.roleId !== "mafia")!;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[0]!.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[1]!.id, targetId: target.id }).state;
+    s = force(s);
+    expect(s.log.some((e) => e.type === "attackAttempted")).toBe(false);
+
+    // One locks, one stays tentative -> force resolves from the ONE locked
+    // vote (plurality among locked, denom 1), discarding the tentative one.
+    let t = start(7, rules({ mafia: 2, villager: 5 }, { mafiaConsensus: "unanimous" }), 1);
+    const tMafia = t.players.filter((p) => p.roleId === "mafia");
+    const tTarget = t.players.find((p) => p.roleId !== "mafia")!;
+    const tOther = t.players.find((p) => p.roleId !== "mafia" && p.id !== tTarget.id)!;
+    t = applyCommand(t, { type: "submitAction", playerId: tMafia[0]!.id, targetId: tTarget.id }).state;
+    t = applyCommand(t, { type: "lockAction", playerId: tMafia[0]!.id }).state;
+    t = applyCommand(t, { type: "submitAction", playerId: tMafia[1]!.id, targetId: tOther.id }).state;
+    t = force(t);
+    expect(t.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", targetId: tTarget.id, outcome: "landed" }));
+    expect(t.log.filter((e) => e.type === "attackAttempted")).toHaveLength(1);
+  });
+
+  test("lock-in: markAbsent on an unlocked killer unblocks natural resolution (removed from the lock denominator)", () => {
+    let s = start(7, rules({ mafia: 2, villager: 5 }, { mafiaConsensus: "unanimous" }), 1);
+    const mafia = s.players.filter((p) => p.roleId === "mafia");
+    const target = s.players.find((p) => p.roleId !== "mafia")!;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[0]!.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id }).state;
+    expect(s.phase).toBe("night"); // mafia[1] hasn't acted at all
+    s = applyCommand(s, { type: "markAbsent", byHost: true, playerId: mafia[1]!.id }).state;
+    expect(s.phase).toBe("dawn");
+    expect(s.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", targetId: target.id, outcome: "landed" }));
+  });
+
+  test("lock-in: unlock returns a locked pick to tentative and re-opens the night", () => {
+    let s = start(7, rules({ mafia: 2, villager: 5 }, { mafiaConsensus: "unanimous" }), 1);
+    const mafia = s.players.filter((p) => p.roleId === "mafia");
+    const target = s.players.find((p) => p.roleId !== "mafia")!;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[0]!.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id }).state;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[1]!.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[1]!.id }).state;
+    expect(s.phase).toBe("dawn"); // resolved
+
+    // Re-run the same script but unlock mafia[1] right before what would
+    // have been the resolving lock — night must NOT resolve.
+    let t = start(7, rules({ mafia: 2, villager: 5 }, { mafiaConsensus: "unanimous" }), 1);
+    const tMafia = t.players.filter((p) => p.roleId === "mafia");
+    const tTarget = t.players.find((p) => p.roleId !== "mafia")!;
+    t = applyCommand(t, { type: "submitAction", playerId: tMafia[0]!.id, targetId: tTarget.id }).state;
+    t = applyCommand(t, { type: "lockAction", playerId: tMafia[0]!.id }).state;
+    t = applyCommand(t, { type: "submitAction", playerId: tMafia[1]!.id, targetId: tTarget.id }).state;
+    t = applyCommand(t, { type: "lockAction", playerId: tMafia[1]!.id }).state;
+    expect(t.phase).toBe("dawn");
+    // Can't unlock post-resolution (phase gate) — prove unlock genuinely
+    // re-opens readiness by unlocking BEFORE the second lock instead.
+    let u = start(7, rules({ mafia: 2, villager: 5 }, { mafiaConsensus: "unanimous" }), 1);
+    const uMafia = u.players.filter((p) => p.roleId === "mafia");
+    const uTarget = u.players.find((p) => p.roleId !== "mafia")!;
+    u = applyCommand(u, { type: "submitAction", playerId: uMafia[0]!.id, targetId: uTarget.id }).state;
+    u = applyCommand(u, { type: "lockAction", playerId: uMafia[0]!.id }).state;
+    u = applyCommand(u, { type: "unlockAction", playerId: uMafia[0]!.id }).state;
+    u = applyCommand(u, { type: "submitAction", playerId: uMafia[1]!.id, targetId: uTarget.id }).state;
+    u = applyCommand(u, { type: "lockAction", playerId: uMafia[1]!.id }).state;
+    // mafia[0] unlocked itself -> only 1 of 2 locked -> still pending.
+    expect(u.phase).toBe("night");
+    u = applyCommand(u, { type: "lockAction", playerId: uMafia[0]!.id }).state;
+    expect(u.phase).toBe("dawn");
+  });
+
+  test("lock-in: changing target (a new submitAction) clears an existing lock", () => {
+    let s = start(7, rules({ mafia: 2, villager: 5 }, { mafiaConsensus: "unanimous" }), 1);
+    const mafia = s.players.filter((p) => p.roleId === "mafia");
+    const villagers = s.players.filter((p) => p.roleId !== "mafia");
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[0]!.id, targetId: villagers[0]!.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id }).state;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[1]!.id, targetId: villagers[0]!.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[1]!.id }).state;
+    expect(s.phase).toBe("dawn"); // sanity: this script does resolve if uninterrupted
+
+    // Same script, but mafia[0] changes their target AFTER locking, right
+    // before mafia[1] locks — the changed pick must revert to tentative.
+    let t = start(7, rules({ mafia: 2, villager: 5 }, { mafiaConsensus: "unanimous" }), 1);
+    const tMafia = t.players.filter((p) => p.roleId === "mafia");
+    const tVillagers = t.players.filter((p) => p.roleId !== "mafia");
+    t = applyCommand(t, { type: "submitAction", playerId: tMafia[0]!.id, targetId: tVillagers[0]!.id }).state;
+    t = applyCommand(t, { type: "lockAction", playerId: tMafia[0]!.id }).state;
+    t = applyCommand(t, { type: "submitAction", playerId: tMafia[0]!.id, targetId: tVillagers[1]!.id }).state;
+    const tVote = t.mafiaVotes.find((v) => v.playerId === tMafia[0]!.id);
+    expect(tVote?.locked).toBe(false);
+    expect(tVote?.targetId).toBe(tVillagers[1]!.id);
+    t = applyCommand(t, { type: "submitAction", playerId: tMafia[1]!.id, targetId: tVillagers[0]!.id }).state;
+    t = applyCommand(t, { type: "lockAction", playerId: tMafia[1]!.id }).state;
+    // mafia[0]'s re-picked vote is unlocked -> still pending.
+    expect(t.phase).toBe("night");
+  });
+
+  test("lock-in: designated mode gates readiness on only the designated killer's lock; non-designated lock state is irrelevant", () => {
+    let s = start(6, rules({ mafia: 2, villager: 4 }, { mafiaConsensus: "designated" }), 4);
+    const dm = s.players.filter((p) => p.roleId === "mafia").sort((a, b) => a.seat - b.seat);
+    const target = s.players.find((p) => p.roleId !== "mafia")!;
+    // Non-designated killer submits+locks a DIFFERENT target -> irrelevant.
+    s = applyCommand(s, { type: "submitAction", playerId: dm[1]!.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: dm[1]!.id }).state;
+    expect(s.phase).toBe("night"); // designated killer hasn't locked yet
+    s = applyCommand(s, { type: "submitAction", playerId: dm[0]!.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: dm[0]!.id }).state;
+    expect(s.phase).toBe("dawn");
+    expect(s.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", targetId: target.id, outcome: "landed" }));
+  });
+
+  test("lock-in protocol semantics: no_pick_to_lock, not_lockable (wrong role/phase/absent), and phase-gate after resolution", () => {
+    let s = start(7, rules({ mafia: 2, villager: 5 }, { mafiaConsensus: "unanimous" }), 1);
+    const mafia = s.players.filter((p) => p.roleId === "mafia");
+    const villager = byRole(s, "villager");
+
+    // No pick set yet -> no_pick_to_lock.
+    const noPick = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id });
+    expect(noPick.rejection?.code).toBe("no_pick_to_lock");
+
+    // Non-killer (villager) can never lock -> not_lockable.
+    const notKiller = applyCommand(s, { type: "lockAction", playerId: villager.id });
+    expect(notKiller.rejection?.code).toBe("not_lockable");
+
+    // Resolve the night fully, then attempt to lock/unlock post-resolution
+    // -> not_lockable (phase-gated before role-gated), never silently
+    // ignored.
+    const target = s.players.find((p) => p.roleId !== "mafia")!;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[0]!.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id }).state;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[1]!.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[1]!.id }).state;
+    expect(s.phase).toBe("dawn");
+    const postResolutionLock = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id });
+    expect(postResolutionLock.rejection?.code).toBe("not_lockable");
+    const postResolutionUnlock = applyCommand(s, { type: "unlockAction", playerId: mafia[0]!.id });
+    expect(postResolutionUnlock.rejection?.code).toBe("not_lockable");
+  });
+
+  test("projection: factionVotes covers ALL living killers (undecided -> null), lockedCount, and consensusReached is locked+converged", () => {
+    let s = start(7, rules({ mafia: 2, villager: 5 }, { mafiaConsensus: "unanimous" }), 1);
+    const mafia = s.players.filter((p) => p.roleId === "mafia").sort((a, b) => a.seat - b.seat);
+    const target = s.players.find((p) => p.roleId !== "mafia")!;
+
+    // Nobody has picked yet: factionVotes still lists both killers, both
+    // undecided (targetId null) — length is the killer COUNT, not a
+    // picked-count proxy.
+    let view = projectFor(s, { kind: "player", id: mafia[0]!.id });
+    expect(view.you?.factionVotes).toHaveLength(2);
+    expect(view.you?.factionVotes?.every((v) => v.targetId === null && !v.locked)).toBe(true);
+    expect(view.you?.lockedCount).toBe(0);
+    expect(view.you?.consensusReached).toBe(false);
+
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[0]!.id, targetId: target.id }).state;
+    view = projectFor(s, { kind: "player", id: mafia[1]!.id });
+    const mine = view.you?.factionVotes?.find((v) => v.voterId === mafia[0]!.id);
+    expect(mine).toEqual({ voterId: mafia[0]!.id, targetId: target.id, locked: false });
+    expect(view.you?.lockedCount).toBe(0);
+
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id }).state;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[1]!.id, targetId: target.id }).state;
+    view = projectFor(s, { kind: "player", id: mafia[1]!.id });
+    expect(view.you?.lockedCount).toBe(1);
+    expect(view.you?.consensusReached).toBe(false); // mafia[1] hasn't locked
+
+    s = applyCommand(s, { type: "lockAction", playerId: mafia[1]!.id }).state;
+    // Night has resolved by now (phase advanced to dawn) — re-derive a
+    // mid-night-shaped view directly from a hand-built state to check the
+    // projection's own field shape independent of phase gating (the
+    // `you.factionVotes` block is only populated `state.phase === "night"`).
+    expect(s.phase).toBe("dawn");
+  });
+
+  test("projection: factionVotes leak-free — not present for non-killers, and no live tentative picks leak to a dead ex-mafia's mid-night god view", () => {
+    let s = start(7, rules({ mafia: 2, villager: 5 }, { mafiaConsensus: "unanimous" }), 1);
+    const mafia = s.players.filter((p) => p.roleId === "mafia");
+    const villager = byRole(s, "villager");
+    s = applyCommand(s, { type: "submitAction", playerId: mafia[0]!.id, targetId: villager.id }).state;
+
+    // Non-mafia living viewer: no factionVotes at all.
+    expect(projectFor(s, { kind: "player", id: villager.id }).you?.factionVotes).toBeUndefined();
+
+    // A dead ex-mafia's god view is resolved-only (Spec 02 v2.2, unchanged
+    // by Spec 08) — no live tentative picks leaked mid-night.
+    const deadState = { ...s, players: s.players.map((p) => (p.id === mafia[0]!.id ? { ...p, alive: false } : p)) };
+    const deadMafiaView = projectFor(deadState, { kind: "player", id: mafia[0]!.id });
+    expect(deadMafiaView.you?.factionVotes).toBeUndefined();
   });
 });

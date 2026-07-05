@@ -91,6 +91,20 @@ export interface RetractVoteMessage {
   type: "retract_vote";
 }
 
+/** Spec 08. Commits the sender's current tentative mafia-kill pick. Rejects
+ * `no_pick_to_lock` if they have no target set, `not_lockable` if they're
+ * not a living mafia-consensus killer during a night phase (including once
+ * the night has already resolved — phase-gated before role-gated). */
+export interface LockActionMessage {
+  type: "lock_action";
+}
+
+/** Spec 08. Returns a previously locked mafia-kill pick to tentative.
+ * Same rejections as `lock_action`. */
+export interface UnlockActionMessage {
+  type: "unlock_action";
+}
+
 /** Echoes the `phaseGen` from the sender's latest snapshot — the engine
  * no-ops (with a `stale_advance` rejection) if it doesn't match the current
  * generation, guarding against a double-fire from a stale client. */
@@ -124,6 +138,8 @@ export type ClientMessage =
   | SubmitActionMessage
   | CastVoteMessage
   | RetractVoteMessage
+  | LockActionMessage
+  | UnlockActionMessage
   | ForceAdvanceMessage
   | MarkAbsentMessage
   | MarkPresentMessage

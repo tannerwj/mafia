@@ -1,5 +1,6 @@
 import type { ClientRoomState } from "../../shared/protocol";
 import { Button } from "../components/ui/button";
+import HelpButton from "../components/HelpButton";
 
 export default function Lobby({
   state,
@@ -19,7 +20,10 @@ export default function Lobby({
 }) {
   return (
     <main className="safe-top safe-bottom safe-x mx-auto flex min-h-dvh w-full max-w-md flex-col items-center gap-6 bg-ink p-6 text-bone">
-      <h1 className="font-display text-3xl text-blood">Lobby</h1>
+      <div className="flex w-full items-center justify-between gap-2">
+        <h1 className="font-display text-3xl text-blood">Lobby</h1>
+        <HelpButton />
+      </div>
 
       <div className="flex items-center gap-3">
         <span

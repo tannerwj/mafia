@@ -36,6 +36,8 @@ const REJECTION_COPY: Record<string, string> = {
   invalid_target: "That's not a valid target.",
   no_game: "There's no game running.",
   game_not_started: "The game hasn't started yet.",
+  no_pick_to_lock: "Choose a target before locking in.",
+  not_lockable: "You can't lock in right now.",
 };
 
 function rejectionMessage(code: string): string {
@@ -171,6 +173,14 @@ export function castVote(target: string): void {
 
 export function retractVote(): void {
   useGameStore.getState().send({ type: "retract_vote" });
+}
+
+export function lockAction(): void {
+  useGameStore.getState().send({ type: "lock_action" });
+}
+
+export function unlockAction(): void {
+  useGameStore.getState().send({ type: "unlock_action" });
 }
 
 export function markAbsent(playerId: string): void {

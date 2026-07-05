@@ -10,7 +10,19 @@ import { roleCopyFor } from "../lib/roleCopy";
 
 const AUTO_DISMISS_MS = 5000;
 
-function RoleCard({ roleId }: { roleId: string }) {
+/** `mafiaRoster`/`isMinion` are the extra knowledge grants Spec 08 D4 pins
+ * for the "My Role" reveal ("mafia roster/minion info as already granted
+ * by the projection") — both optional so the plain auto-reveal/HoldToPeek
+ * call sites (which never passed them) keep working unchanged. */
+export function RoleCard({
+  roleId,
+  mafiaRoster,
+  playerNames,
+}: {
+  roleId: string;
+  mafiaRoster?: string[] | undefined;
+  playerNames?: Map<string, string> | undefined;
+}) {
   const copy = roleCopyFor(roleId);
   return (
     <div className="flex flex-col items-center gap-2 text-center">
@@ -19,6 +31,24 @@ function RoleCard({ roleId }: { roleId: string }) {
       </p>
       <h2 className="font-display text-4xl text-brass">{copy.displayName}</h2>
       {copy.blurb && <p className="max-w-xs text-sm text-bone/80">{copy.blurb}</p>}
+      {mafiaRoster && (
+        <div data-testid="role-card-mafia-roster" className="mt-2 w-full text-left text-sm">
+          <p className="mb-1 text-xs uppercase tracking-widest text-smoke">
+            {roleId === "minion" ? "The Mafia" : "Your partners"}
+          </p>
+          {mafiaRoster.length === 0 ? (
+            <p className="text-bone/80">No one else is Mafia.</p>
+          ) : (
+            <ul className="flex flex-col gap-1">
+              {mafiaRoster.map((id) => (
+                <li key={id} className="text-blood">
+                  {playerNames?.get(id) ?? id}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   );
 }

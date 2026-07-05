@@ -33,7 +33,11 @@ async function startGameWithSeed(hostPage: Page, seed: number) {
   await hostPage.getByTestId("start-game").click();
 }
 
-async function startGameWithSeedAndRoles(hostPage: Page, seed: number, roles: Record<string, number>) {
+async function startGameWithSeedAndRoles(
+  hostPage: Page,
+  seed: number,
+  roles: Record<string, number>,
+) {
   await hostPage.evaluate(
     ({ s, r }) => {
       sessionStorage.setItem("mafia:testSeed", String(s));
@@ -45,9 +49,13 @@ async function startGameWithSeedAndRoles(hostPage: Page, seed: number, roles: Re
 }
 
 async function waitForPhase(page: Page, phase: string, timeout = 25_000) {
-  await expect(page.getByTestId("game-screen")).toHaveAttribute("data-phase", phase, {
-    timeout,
-  });
+  await expect(page.getByTestId("game-screen")).toHaveAttribute(
+    "data-phase",
+    phase,
+    {
+      timeout,
+    },
+  );
 }
 
 // RoleReveal (Radix Dialog) auto-dismisses 5s after assignment; its overlay
@@ -156,7 +164,9 @@ test("HoldToPeek: keyboard activation gives a timed reveal with an aria-live ann
   await expect(live).toContainText("revealed");
 
   // Timed reveal (3s) hides itself without any further interaction.
-  await expect(content).toHaveAttribute("data-revealed", "false", { timeout: 5_000 });
+  await expect(content).toHaveAttribute("data-revealed", "false", {
+    timeout: 5_000,
+  });
   await expect(live).toContainText("hidden");
 
   await game.closeAll();
@@ -173,16 +183,38 @@ test("vote change re-renders the current-vote highlight, no confirm-lock", async
 
   // Fast-forward through night 1 with a harmless script so we reach day 1's
   // voting screen (this test is about vote UI, not the night script).
-  await game.bob.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
-  await game.erin.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
-  await game.dave.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
-  await game.alice.getByTestId("night-target-option").filter({ hasText: "Bob" }).click();
+  await game.bob
+    .getByTestId("night-target-option")
+    .filter({ hasText: "Carol" })
+    .click();
+  await game.erin
+    .getByTestId("night-target-option")
+    .filter({ hasText: "Carol" })
+    .click();
+  await game.dave
+    .getByTestId("night-target-option")
+    .filter({ hasText: "Carol" })
+    .click();
+  await game.alice
+    .getByTestId("night-target-option")
+    .filter({ hasText: "Bob" })
+    .click();
+  // Spec 08: the mafia team (Bob, Erin) must lock in their agreed target
+  // before the night can resolve — submitting alone is only tentative.
+  await expect(game.bob.getByTestId("lock-in-button")).toBeEnabled();
+  await game.bob.getByTestId("lock-in-button").click();
+  await expect(game.erin.getByTestId("lock-in-button")).toBeEnabled();
+  await game.erin.getByTestId("lock-in-button").click();
 
   await waitForPhase(game.alice, "dawn", 25_000);
   await waitForPhase(game.alice, "day", 25_000);
 
-  const bobOption = game.alice.getByTestId("vote-option").filter({ hasText: "Bob" });
-  const carolOption = game.alice.getByTestId("vote-option").filter({ hasText: "Carol" });
+  const bobOption = game.alice
+    .getByTestId("vote-option")
+    .filter({ hasText: "Bob" });
+  const carolOption = game.alice
+    .getByTestId("vote-option")
+    .filter({ hasText: "Carol" });
 
   await bobOption.click();
   await expect(bobOption).toHaveAttribute("data-voted", "true");
@@ -203,27 +235,62 @@ test("hidden-mode tally shows counts, never names", async ({ browser }) => {
     await waitForRoleRevealToClose(p);
   }
 
-  await game.bob.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
-  await game.erin.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
-  await game.dave.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
-  await game.alice.getByTestId("night-target-option").filter({ hasText: "Bob" }).click();
+  await game.bob
+    .getByTestId("night-target-option")
+    .filter({ hasText: "Carol" })
+    .click();
+  await game.erin
+    .getByTestId("night-target-option")
+    .filter({ hasText: "Carol" })
+    .click();
+  await game.dave
+    .getByTestId("night-target-option")
+    .filter({ hasText: "Carol" })
+    .click();
+  await game.alice
+    .getByTestId("night-target-option")
+    .filter({ hasText: "Bob" })
+    .click();
+  // Spec 08: the mafia team (Bob, Erin) must lock in their agreed target
+  // before the night can resolve — submitting alone is only tentative.
+  await expect(game.bob.getByTestId("lock-in-button")).toBeEnabled();
+  await game.bob.getByTestId("lock-in-button").click();
+  await expect(game.erin.getByTestId("lock-in-button")).toBeEnabled();
+  await game.erin.getByTestId("lock-in-button").click();
 
   await waitForPhase(game.alice, "dawn", 25_000);
   await waitForPhase(game.alice, "day", 25_000);
 
   // House rules default to hidden voting visibility -- the tally must read
   // "N of M have voted" and never render another player's chosen target.
-  await expect(game.alice.getByTestId("vote-tally")).toHaveAttribute("data-mode", "hidden");
-  await expect(game.alice.getByTestId("vote-tally")).toContainText("of 5 have voted");
+  await expect(game.alice.getByTestId("vote-tally")).toHaveAttribute(
+    "data-mode",
+    "hidden",
+  );
+  await expect(game.alice.getByTestId("vote-tally")).toContainText(
+    "of 5 have voted",
+  );
 
-  await game.bob.getByTestId("vote-option").filter({ hasText: "Carol" }).click();
-  await expect(game.alice.getByTestId("vote-tally")).toContainText("1 of 5 have voted");
+  await game.bob
+    .getByTestId("vote-option")
+    .filter({ hasText: "Carol" })
+    .click();
+  await expect(game.alice.getByTestId("vote-tally")).toContainText(
+    "1 of 5 have voted",
+  );
 
-  await game.dave.getByTestId("vote-option").filter({ hasText: "Carol" }).click();
-  await expect(game.alice.getByTestId("vote-tally")).toContainText("2 of 5 have voted");
+  await game.dave
+    .getByTestId("vote-option")
+    .filter({ hasText: "Carol" })
+    .click();
+  await expect(game.alice.getByTestId("vote-tally")).toContainText(
+    "2 of 5 have voted",
+  );
 
   // No per-candidate vote counts render in hidden mode.
-  await expect(game.alice.getByTestId("vote-option").filter({ hasText: "Carol" })).not.toContainText(/\d/);
+  await expect(
+    game.alice.getByTestId("vote-option").filter({ hasText: "Carol" }),
+  ).not.toContainText(/\d/);
 
   await game.closeAll();
 });
@@ -239,7 +306,12 @@ test("hidden-mode tally shows counts, never names", async ({ browser }) => {
 test("you.mafiaRoster (Spec 02 v2.6): a minion context renders the mafia's name, a villager context never does", async ({
   browser,
 }) => {
-  const game = await setUpFivePlayerGame(browser, 1, { mafia: 1, villager: 1, minion: 1, suicide_bomber: 0 });
+  const game = await setUpFivePlayerGame(browser, 1, {
+    mafia: 1,
+    villager: 1,
+    minion: 1,
+    suicide_bomber: 0,
+  });
   await waitForPhase(game.alice, "night");
   for (const p of [game.alice, game.bob, game.carol, game.dave, game.erin]) {
     await waitForRoleRevealToClose(p);
@@ -260,9 +332,22 @@ test("you.mafiaRoster (Spec 02 v2.6): a minion context renders the mafia's name,
   // same night -- nobody dies, so the game continues past dawn instead of
   // resolving parity (killing the lone villager here would immediately end
   // the game, since mafia+minion would already equal the remaining town).
-  await game.dave.getByTestId("night-target-option").filter({ hasText: "Bob" }).click();
-  await game.bob.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
-  await game.erin.getByTestId("night-target-option").filter({ hasText: "Bob" }).click();
+  await game.dave
+    .getByTestId("night-target-option")
+    .filter({ hasText: "Bob" })
+    .click();
+  // Spec 08: Dave is the sole mafia killer here — he must lock in before
+  // the night can resolve naturally.
+  await expect(game.dave.getByTestId("lock-in-button")).toBeEnabled();
+  await game.dave.getByTestId("lock-in-button").click();
+  await game.bob
+    .getByTestId("night-target-option")
+    .filter({ hasText: "Carol" })
+    .click();
+  await game.erin
+    .getByTestId("night-target-option")
+    .filter({ hasText: "Bob" })
+    .click();
 
   await waitForPhase(game.alice, "dawn", 25_000);
   await waitForPhase(game.alice, "day", 25_000);
@@ -282,15 +367,35 @@ test("you.currentVote (Spec 02 v2.6): a hard reload mid-vote restores the curren
     await waitForRoleRevealToClose(p);
   }
 
-  await game.bob.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
-  await game.erin.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
-  await game.dave.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
-  await game.alice.getByTestId("night-target-option").filter({ hasText: "Bob" }).click();
+  await game.bob
+    .getByTestId("night-target-option")
+    .filter({ hasText: "Carol" })
+    .click();
+  await game.erin
+    .getByTestId("night-target-option")
+    .filter({ hasText: "Carol" })
+    .click();
+  await game.dave
+    .getByTestId("night-target-option")
+    .filter({ hasText: "Carol" })
+    .click();
+  await game.alice
+    .getByTestId("night-target-option")
+    .filter({ hasText: "Bob" })
+    .click();
+  // Spec 08: the mafia team (Bob, Erin) must lock in their agreed target
+  // before the night can resolve — submitting alone is only tentative.
+  await expect(game.bob.getByTestId("lock-in-button")).toBeEnabled();
+  await game.bob.getByTestId("lock-in-button").click();
+  await expect(game.erin.getByTestId("lock-in-button")).toBeEnabled();
+  await game.erin.getByTestId("lock-in-button").click();
 
   await waitForPhase(game.alice, "dawn", 25_000);
   await waitForPhase(game.alice, "day", 25_000);
 
-  const bobOption = game.alice.getByTestId("vote-option").filter({ hasText: "Bob" });
+  const bobOption = game.alice
+    .getByTestId("vote-option")
+    .filter({ hasText: "Bob" });
   await bobOption.click();
   await expect(bobOption).toHaveAttribute("data-voted", "true");
 
@@ -299,10 +404,9 @@ test("you.currentVote (Spec 02 v2.6): a hard reload mid-vote restores the curren
   // freshly-hydrated snapshot, not lost until the voter re-clicks.
   await game.alice.reload();
   await waitForPhase(game.alice, "day", 25_000);
-  await expect(game.alice.getByTestId("vote-option").filter({ hasText: "Bob" })).toHaveAttribute(
-    "data-voted",
-    "true",
-  );
+  await expect(
+    game.alice.getByTestId("vote-option").filter({ hasText: "Bob" }),
+  ).toHaveAttribute("data-voted", "true");
 
   await game.closeAll();
 });

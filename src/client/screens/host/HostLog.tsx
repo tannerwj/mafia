@@ -17,6 +17,10 @@ function describe(event: GameEvent, names: Map<string, string>): string {
       return `Phase -> ${event.phase} (day ${event.day})`;
     case "actionSubmitted":
       return `${name(event.actorId)} submitted ${event.actionType}${event.targetId ? ` -> ${name(event.targetId)}` : ""}`;
+    case "actionLocked":
+      return `${name(event.actorId)} locked in their pick`;
+    case "actionUnlocked":
+      return `${name(event.actorId)} unlocked their pick`;
     case "voteCast":
       return `${name(event.voterId)} voted for ${event.target === "no_murder" ? "no murder" : name(event.target)}`;
     case "voteRetracted":

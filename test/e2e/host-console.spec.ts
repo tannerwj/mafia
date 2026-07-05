@@ -34,9 +34,13 @@ async function startGameWithSeed(hostPage: Page, seed: number) {
 }
 
 async function waitForPhase(page: Page, phase: string, timeout = 25_000) {
-  await expect(page.getByTestId("game-screen")).toHaveAttribute("data-phase", phase, {
-    timeout,
-  });
+  await expect(page.getByTestId("game-screen")).toHaveAttribute(
+    "data-phase",
+    phase,
+    {
+      timeout,
+    },
+  );
 }
 
 async function waitForHostPhase(page: Page, phase: string, timeout = 25_000) {
@@ -48,7 +52,9 @@ async function waitForHostPhase(page: Page, phase: string, timeout = 25_000) {
   // exists at all), so "ended" must assert on HostGameEnd's own testid
   // instead of ever looking for the (by then absent) phase label.
   if (phase === "ended") {
-    await expect(page.getByTestId("host-winner-splash")).toBeVisible({ timeout });
+    await expect(page.getByTestId("host-winner-splash")).toBeVisible({
+      timeout,
+    });
   } else {
     await expect(page.getByTestId("host-phase-label")).toContainText(
       new RegExp(phase, "i"),
@@ -58,7 +64,10 @@ async function waitForHostPhase(page: Page, phase: string, timeout = 25_000) {
 }
 
 async function submitNightTarget(page: Page, targetName: string) {
-  await page.getByTestId("night-target-option").filter({ hasText: targetName }).click();
+  await page
+    .getByTestId("night-target-option")
+    .filter({ hasText: targetName })
+    .click();
 }
 
 async function waitForRoleRevealToClose(page: Page) {
@@ -82,7 +91,9 @@ async function castNoMurder(page: Page) {
 // drill, it's the baseline "does the console work for an ordinary game" case.
 // ---------------------------------------------------------------------------
 test.describe("full hosted game via the console only", () => {
-  test("host starts, watches, and rematches — never touching player screens", async ({ browser }) => {
+  test("host starts, watches, and rematches — never touching player screens", async ({
+    browser,
+  }) => {
     const hostCtx = await browser.newContext();
     const aliceCtx = await browser.newContext();
     const bobCtx = await browser.newContext();
@@ -109,20 +120,33 @@ test.describe("full hosted game via the console only", () => {
     // start button before the roster is full enough... actually 5 already
     // clears the 3-player gate; assert the gate text/summary card render.
     await expect(hostPage.getByTestId("house-rules-summary")).toBeVisible();
-    await expect(hostPage.getByTestId("host-player-table")).toContainText("Alice");
-    await expect(hostPage.getByTestId("host-player-table")).toContainText("Erin");
+    await expect(hostPage.getByTestId("host-player-table")).toContainText(
+      "Alice",
+    );
+    await expect(hostPage.getByTestId("host-player-table")).toContainText(
+      "Erin",
+    );
 
     await startGameWithSeed(hostPage, 42);
 
-    for (const p of [alice, bob, carol, dave, erin]) await waitForPhase(p, "night");
+    for (const p of [alice, bob, carol, dave, erin])
+      await waitForPhase(p, "night");
     await waitForHostPhase(hostPage, "Night");
 
     // Host sees full unredacted roles immediately (live god view) — no
     // reveal dialog gating, unlike players.
-    await expect(hostPage.getByTestId("host-player-table")).toContainText("Detective");
-    await expect(hostPage.getByTestId("host-player-table")).toContainText("Mafia");
-    await expect(hostPage.getByTestId("host-player-table")).toContainText("Angel");
-    await expect(hostPage.getByTestId("host-player-table")).toContainText("Suicide Bomber");
+    await expect(hostPage.getByTestId("host-player-table")).toContainText(
+      "Detective",
+    );
+    await expect(hostPage.getByTestId("host-player-table")).toContainText(
+      "Mafia",
+    );
+    await expect(hostPage.getByTestId("host-player-table")).toContainText(
+      "Angel",
+    );
+    await expect(hostPage.getByTestId("host-player-table")).toContainText(
+      "Suicide Bomber",
+    );
 
     for (const p of [alice, bob, carol, dave, erin]) {
       await waitForRoleRevealToClose(p);
@@ -131,17 +155,23 @@ test.describe("full hosted game via the console only", () => {
     // Night 1: mafia (Bob+Erin) converge on Carol; angel (Dave) saves her.
     await submitNightTarget(bob, "Carol");
     await submitNightTarget(erin, "Carol");
+    await expect(bob.getByTestId("lock-in-button")).toBeEnabled();
+    await bob.getByTestId("lock-in-button").click();
+    await expect(erin.getByTestId("lock-in-button")).toBeEnabled();
+    await erin.getByTestId("lock-in-button").click();
     await submitNightTarget(dave, "Carol");
     await submitNightTarget(alice, "Bob");
 
     await waitForPhase(alice, "dawn", 25_000);
-    for (const p of [bob, carol, dave, erin]) await waitForPhase(p, "dawn", 25_000);
+    for (const p of [bob, carol, dave, erin])
+      await waitForPhase(p, "dawn", 25_000);
     await waitForHostPhase(hostPage, "Dawn");
     // The host log is full and unredacted — it must show the attack outcome.
     await expect(hostPage.getByTestId("host-log")).toContainText("failed");
 
     await waitForPhase(alice, "day", 25_000);
-    for (const p of [bob, carol, dave, erin]) await waitForPhase(p, "day", 25_000);
+    for (const p of [bob, carol, dave, erin])
+      await waitForPhase(p, "day", 25_000);
     await waitForHostPhase(hostPage, "Day");
 
     // A clean day-1 vote (no tie, avoids the runoff path used elsewhere) —
@@ -157,6 +187,8 @@ test.describe("full hosted game via the console only", () => {
 
     // Night 2: remaining mafia (Erin) kills Carol.
     await submitNightTarget(erin, "Carol");
+    await expect(erin.getByTestId("lock-in-button")).toBeEnabled();
+    await erin.getByTestId("lock-in-button").click();
     await submitNightTarget(dave, "Alice");
     await submitNightTarget(alice, "Erin");
 
@@ -171,16 +203,24 @@ test.describe("full hosted game via the console only", () => {
 
     await waitForPhase(alice, "ended", 25_000);
     await waitForHostPhase(hostPage, "ended");
-    await expect(hostPage.getByTestId("host-winner-splash")).toContainText("village");
-    await expect(hostPage.getByTestId("host-final-roles")).toContainText("Mafia");
+    await expect(hostPage.getByTestId("host-winner-splash")).toContainText(
+      "village",
+    );
+    await expect(hostPage.getByTestId("host-final-roles")).toContainText(
+      "Mafia",
+    );
 
     // Rematch: new_game from ended -> all contexts land in lobby, seats kept.
     await hostPage.getByTestId("new-game").click();
     await hostPage.getByTestId("new-game-confirm-confirm").click();
 
     await expect(hostPage.getByTestId("house-rules-summary")).toBeVisible();
-    await expect(hostPage.getByTestId("host-player-table")).toContainText("Alice");
-    await expect(hostPage.getByTestId("host-player-table")).toContainText("Erin");
+    await expect(hostPage.getByTestId("host-player-table")).toContainText(
+      "Alice",
+    );
+    await expect(hostPage.getByTestId("host-player-table")).toContainText(
+      "Erin",
+    );
     for (const p of [alice, bob, carol, dave, erin]) {
       await expect(p.getByTestId("player-list")).toBeVisible();
     }
@@ -202,7 +242,9 @@ test.describe("full hosted game via the console only", () => {
 // before the app loads.
 // ---------------------------------------------------------------------------
 test.describe("share link degrades gracefully when clipboard is denied", () => {
-  test("surfaces the room URL for manual copy when share is absent and clipboard rejects", async ({ browser }) => {
+  test("surfaces the room URL for manual copy when share is absent and clipboard rejects", async ({
+    browser,
+  }) => {
     const hostCtx = await browser.newContext();
     const hostPage = await hostCtx.newPage();
 
@@ -246,7 +288,9 @@ test.describe("share link degrades gracefully when clipboard is denied", () => {
 // with a confusing role_count_mismatch.
 // ---------------------------------------------------------------------------
 test.describe("start gate reflects the real house-ruleset minimum", () => {
-  test("start-game is disabled at 4 players and enabled at 5", async ({ browser }) => {
+  test("start-game is disabled at 4 players and enabled at 5", async ({
+    browser,
+  }) => {
     const hostCtx = await browser.newContext();
     const hostPage = await hostCtx.newPage();
     const roomCode = await createRoomAsHost(hostPage);
@@ -264,7 +308,9 @@ test.describe("start gate reflects the real house-ruleset minimum", () => {
     }
 
     // Host console reflects 4 players and a gated, honest button.
-    await expect(hostPage.getByTestId("host-player-table")).toContainText("Dave");
+    await expect(hostPage.getByTestId("host-player-table")).toContainText(
+      "Dave",
+    );
     await expect(startBtn).toBeDisabled();
     await expect(startBtn).toContainText("Need at least 5 players");
 
@@ -274,7 +320,9 @@ test.describe("start gate reflects the real house-ruleset minimum", () => {
     const erin = await erinCtx.newPage();
     await joinAsPlayer(erin, roomCode, "Erin");
 
-    await expect(hostPage.getByTestId("host-player-table")).toContainText("Erin");
+    await expect(hostPage.getByTestId("host-player-table")).toContainText(
+      "Erin",
+    );
     await expect(startBtn).toBeEnabled();
     await expect(startBtn).toHaveText("Start game");
 
@@ -289,7 +337,9 @@ test.describe("start gate reflects the real house-ruleset minimum", () => {
 // mafia's already-converged pick resolves -> game continues.
 // ---------------------------------------------------------------------------
 test.describe("stall drill: mark absent unblocks a stalled night", () => {
-  test("marking a ghosting mafia absent lets the converged kill resolve", async ({ browser }) => {
+  test("marking a ghosting mafia absent lets the converged kill resolve", async ({
+    browser,
+  }) => {
     const hostCtx = await browser.newContext();
     const aliceCtx = await browser.newContext();
     const bobCtx = await browser.newContext();
@@ -313,33 +363,50 @@ test.describe("stall drill: mark absent unblocks a stalled night", () => {
     await joinAsPlayer(erin, roomCode, "Erin");
 
     await startGameWithSeed(hostPage, 42);
-    for (const p of [alice, bob, carol, dave, erin]) await waitForPhase(p, "night");
-    for (const p of [alice, bob, carol, dave, erin]) await waitForRoleRevealToClose(p);
+    for (const p of [alice, bob, carol, dave, erin])
+      await waitForPhase(p, "night");
+    for (const p of [alice, bob, carol, dave, erin])
+      await waitForRoleRevealToClose(p);
 
-    // Bob (mafia) converges on Carol; Erin (the other mafia) never submits —
-    // simulates a ghosting player. Dave (angel) and Alice (detective) act
-    // normally so only the mafia consensus is stalled.
+    // Bob (mafia) converges on Carol AND locks in; Erin (the other mafia)
+    // never submits at all — simulates a ghosting player. Dave (angel) and
+    // Alice (detective) act normally so only the mafia consensus is
+    // stalled. Spec 08: Bob's `acted` status requires his LOCK, not just his
+    // submission.
     await submitNightTarget(bob, "Carol");
+    await expect(bob.getByTestId("lock-in-button")).toBeEnabled();
+    await bob.getByTestId("lock-in-button").click();
     await submitNightTarget(dave, "Carol");
     await submitNightTarget(alice, "Bob");
 
     // Confirm the night is genuinely stalled — still night after every other
     // actor has submitted.
-    await expect(hostPage.getByTestId("host-phase-label")).toContainText(/night/i);
+    await expect(hostPage.getByTestId("host-phase-label")).toContainText(
+      /night/i,
+    );
 
     // Live god-view status column (Spec 02 v2.7's players[].acted, host+
-    // night-only): Bob and Dave have submitted -> "acted"; Erin (the
-    // ghosting mafia) still owes her consensus vote -> "pending"; Carol
-    // (suicide bomber, no night action) has nothing to submit -> "asleep",
-    // never a fabricated "pending".
+    // night-only, amended by Spec 08 for mafia = locked-only): Bob has
+    // LOCKED -> "acted"; Erin (the ghosting mafia) still owes her consensus
+    // vote -> "pending"; Carol (suicide bomber, no night action) has
+    // nothing to submit -> "asleep", never a fabricated "pending".
     await expect(
-      hostPage.getByTestId("host-player-row").filter({ hasText: "Bob" }).getByTestId("host-player-status"),
+      hostPage
+        .getByTestId("host-player-row")
+        .filter({ hasText: "Bob" })
+        .getByTestId("host-player-status"),
     ).toContainText(/acted/i);
     await expect(
-      hostPage.getByTestId("host-player-row").filter({ hasText: "Erin" }).getByTestId("host-player-status"),
+      hostPage
+        .getByTestId("host-player-row")
+        .filter({ hasText: "Erin" })
+        .getByTestId("host-player-status"),
     ).toContainText(/pending/i);
     await expect(
-      hostPage.getByTestId("host-player-row").filter({ hasText: "Carol" }).getByTestId("host-player-status"),
+      hostPage
+        .getByTestId("host-player-row")
+        .filter({ hasText: "Carol" })
+        .getByTestId("host-player-status"),
     ).toContainText(/asleep/i);
 
     // Host marks Erin absent from her row in the table.
@@ -355,7 +422,9 @@ test.describe("stall drill: mark absent unblocks a stalled night", () => {
     // Absent leaves the consensus denominator -> Bob's already-converged
     // pick (Carol) resolves the kill; angel's save means the attack fails.
     await waitForPhase(alice, "dawn", 25_000);
-    await expect(alice.getByTestId("interstitial-lines")).toContainText("attack failed");
+    await expect(alice.getByTestId("interstitial-lines")).toContainText(
+      "attack failed",
+    );
     await waitForHostPhase(hostPage, "Dawn");
 
     await hostCtx.close();
@@ -372,7 +441,9 @@ test.describe("stall drill: mark absent unblocks a stalled night", () => {
 // per-phase confirm copy -> dusk resolves per whoever had voted.
 // ---------------------------------------------------------------------------
 test.describe("stall drill: force-advance a stalled vote", () => {
-  test("force-advance shows day confirm copy and resolves the vote with partial ballots", async ({ browser }) => {
+  test("force-advance shows day confirm copy and resolves the vote with partial ballots", async ({
+    browser,
+  }) => {
     const hostCtx = await browser.newContext();
     const aliceCtx = await browser.newContext();
     const bobCtx = await browser.newContext();
@@ -396,19 +467,27 @@ test.describe("stall drill: force-advance a stalled vote", () => {
     await joinAsPlayer(erin, roomCode, "Erin");
 
     await startGameWithSeed(hostPage, 42);
-    for (const p of [alice, bob, carol, dave, erin]) await waitForPhase(p, "night");
-    for (const p of [alice, bob, carol, dave, erin]) await waitForRoleRevealToClose(p);
+    for (const p of [alice, bob, carol, dave, erin])
+      await waitForPhase(p, "night");
+    for (const p of [alice, bob, carol, dave, erin])
+      await waitForRoleRevealToClose(p);
 
-    // Clean night: mafia converge on Carol, angel saves her.
+    // Clean night: mafia converge on Carol and lock in, angel saves her.
     await submitNightTarget(bob, "Carol");
     await submitNightTarget(erin, "Carol");
+    await expect(bob.getByTestId("lock-in-button")).toBeEnabled();
+    await bob.getByTestId("lock-in-button").click();
+    await expect(erin.getByTestId("lock-in-button")).toBeEnabled();
+    await erin.getByTestId("lock-in-button").click();
     await submitNightTarget(dave, "Carol");
     await submitNightTarget(alice, "Bob");
 
     await waitForPhase(alice, "dawn", 25_000);
-    for (const p of [bob, carol, dave, erin]) await waitForPhase(p, "dawn", 25_000);
+    for (const p of [bob, carol, dave, erin])
+      await waitForPhase(p, "dawn", 25_000);
     await waitForPhase(alice, "day", 25_000);
-    for (const p of [bob, carol, dave, erin]) await waitForPhase(p, "day", 25_000);
+    for (const p of [bob, carol, dave, erin])
+      await waitForPhase(p, "day", 25_000);
     await waitForHostPhase(hostPage, "Day");
 
     // Only Alice and Dave vote; the rest stall.
@@ -441,7 +520,9 @@ test.describe("stall drill: force-advance a stalled vote", () => {
 // phase advances; the second tab toasts "already advanced".
 // ---------------------------------------------------------------------------
 test.describe("double-fire guard", () => {
-  test("two host tabs confirming force-advance near-simultaneously advance exactly one phase", async ({ browser }) => {
+  test("two host tabs confirming force-advance near-simultaneously advance exactly one phase", async ({
+    browser,
+  }) => {
     const hostCtx = await browser.newContext();
     const aliceCtx = await browser.newContext();
     const bobCtx = await browser.newContext();
@@ -473,8 +554,10 @@ test.describe("double-fire guard", () => {
     await joinAsPlayer(erin, roomCode, "Erin");
 
     await startGameWithSeed(hostPageA, 42);
-    for (const p of [alice, bob, carol, dave, erin]) await waitForPhase(p, "night");
-    for (const p of [alice, bob, carol, dave, erin]) await waitForRoleRevealToClose(p);
+    for (const p of [alice, bob, carol, dave, erin])
+      await waitForPhase(p, "night");
+    for (const p of [alice, bob, carol, dave, erin])
+      await waitForRoleRevealToClose(p);
 
     // Nobody acts — the whole night is stalled, both host tabs see it.
     await waitForHostPhase(hostPageA, "Night");
@@ -492,7 +575,8 @@ test.describe("double-fire guard", () => {
 
     // Exactly one phase advance happened: dawn, not skipped past into day.
     await waitForPhase(alice, "dawn", 25_000);
-    for (const p of [bob, carol, dave, erin]) await waitForPhase(p, "dawn", 25_000);
+    for (const p of [bob, carol, dave, erin])
+      await waitForPhase(p, "dawn", 25_000);
     await waitForHostPhase(hostPageA, "Dawn");
 
     // One of the two tabs saw the "already advanced" rejection toast (each
@@ -505,9 +589,13 @@ test.describe("double-fire guard", () => {
         .catch(() => false);
     }
     await expect
-      .poll(async () => (await toastVisible(hostPageA)) || (await toastVisible(hostPageB)), {
-        timeout: 10_000,
-      })
+      .poll(
+        async () =>
+          (await toastVisible(hostPageA)) || (await toastVisible(hostPageB)),
+        {
+          timeout: 10_000,
+        },
+      )
       .toBe(true);
 
     await hostCtx.close();
@@ -526,7 +614,9 @@ test.describe("double-fire guard", () => {
 // just that the UI hides it).
 // ---------------------------------------------------------------------------
 test.describe("authority", () => {
-  test("a player cannot force-advance even by sending the protocol message directly", async ({ browser }) => {
+  test("a player cannot force-advance even by sending the protocol message directly", async ({
+    browser,
+  }) => {
     const hostCtx = await browser.newContext();
     const aliceCtx = await browser.newContext();
     const bobCtx = await browser.newContext();
@@ -550,7 +640,8 @@ test.describe("authority", () => {
     await joinAsPlayer(erin, roomCode, "Erin");
 
     await startGameWithSeed(hostPage, 42);
-    for (const p of [alice, bob, carol, dave, erin]) await waitForPhase(p, "night");
+    for (const p of [alice, bob, carol, dave, erin])
+      await waitForPhase(p, "night");
 
     // No force-advance control exists anywhere on a player's screen.
     await expect(alice.getByTestId("force-advance-button")).toHaveCount(0);
@@ -584,7 +675,9 @@ test.describe("authority", () => {
 // connected player context still never renders others' roles (regression).
 // ---------------------------------------------------------------------------
 test.describe("privacy", () => {
-  test("host sees every role; a living player never sees another player's role", async ({ browser }) => {
+  test("host sees every role; a living player never sees another player's role", async ({
+    browser,
+  }) => {
     const hostCtx = await browser.newContext();
     const aliceCtx = await browser.newContext();
     const bobCtx = await browser.newContext();
@@ -608,7 +701,8 @@ test.describe("privacy", () => {
     await joinAsPlayer(erin, roomCode, "Erin");
 
     await startGameWithSeed(hostPage, 42);
-    for (const p of [alice, bob, carol, dave, erin]) await waitForPhase(p, "night");
+    for (const p of [alice, bob, carol, dave, erin])
+      await waitForPhase(p, "night");
 
     // Host sees every role immediately, no dialog gating.
     const hostHtml = await hostPage.locator("#root").innerHTML();
@@ -644,7 +738,9 @@ test.describe("privacy", () => {
 // live pending state; players unaffected.
 // ---------------------------------------------------------------------------
 test.describe("host reconnect", () => {
-  test("host tab closed mid-night and reopened restores the live console; players unaffected", async ({ browser }) => {
+  test("host tab closed mid-night and reopened restores the live console; players unaffected", async ({
+    browser,
+  }) => {
     const hostCtx = await browser.newContext();
     const aliceCtx = await browser.newContext();
     const bobCtx = await browser.newContext();
@@ -668,8 +764,10 @@ test.describe("host reconnect", () => {
     await joinAsPlayer(erin, roomCode, "Erin");
 
     await startGameWithSeed(hostPage, 42);
-    for (const p of [alice, bob, carol, dave, erin]) await waitForPhase(p, "night");
-    for (const p of [alice, bob, carol, dave, erin]) await waitForRoleRevealToClose(p);
+    for (const p of [alice, bob, carol, dave, erin])
+      await waitForPhase(p, "night");
+    for (const p of [alice, bob, carol, dave, erin])
+      await waitForRoleRevealToClose(p);
 
     await submitNightTarget(bob, "Carol");
     await submitNightTarget(dave, "Carol");
@@ -687,15 +785,27 @@ test.describe("host reconnect", () => {
 
     // Console restores with live pending state — the god view still shows
     // the in-flight night (Bob/Dave have acted, Erin/Alice haven't).
-    await expect(hostPage.getByTestId("host-phase-label")).toContainText(/night/i);
-    await expect(hostPage.getByTestId("host-player-table")).toContainText("Mafia");
+    await expect(hostPage.getByTestId("host-phase-label")).toContainText(
+      /night/i,
+    );
+    await expect(hostPage.getByTestId("host-player-table")).toContainText(
+      "Mafia",
+    );
 
-    // Players never noticed — finish the night normally.
+    // Players never noticed — finish the night normally. Spec 08: the
+    // mafia team (Bob, Erin) must lock in their agreed target before the
+    // night can resolve.
     await submitNightTarget(erin, "Carol");
+    await expect(bob.getByTestId("lock-in-button")).toBeEnabled();
+    await bob.getByTestId("lock-in-button").click();
+    await expect(erin.getByTestId("lock-in-button")).toBeEnabled();
+    await erin.getByTestId("lock-in-button").click();
     await submitNightTarget(alice, "Bob");
 
     await waitForPhase(alice, "dawn", 25_000);
-    await expect(alice.getByTestId("interstitial-lines")).toContainText("attack failed");
+    await expect(alice.getByTestId("interstitial-lines")).toContainText(
+      "attack failed",
+    );
 
     await hostCtx.close();
     await aliceCtx.close();

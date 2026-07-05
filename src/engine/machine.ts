@@ -2,6 +2,7 @@ import { nextRandom, shuffle } from "./rng";
 import { materializeRoleCounts, type Ruleset } from "./ruleset";
 import { activeNightActionFor, canSubmitMafiaVote, configureRoles, currentRoles, getRole, hasNightInput, mafiaKillers, type RoleRegistry } from "./roles";
 import { resolveNight } from "./resolve-night";
+import { resolveConsensus } from "./consensus";
 import { evaluateWin } from "./win";
 import type { Command, Effect, EngineResult, GameEvent, GameState, LobbyPlayer, PlayerState, VoteTarget } from "./types";
 
@@ -102,12 +103,12 @@ export function applyCommand(input: GameState, cmd: Command): EngineResult {
   try {
     if (cmd.type === "timerExpired") {
       if (cmd.at !== state.deadlineAt) return { state: input, effects: [] };
-      return advancePhase(state, cmd.now);
+      return advancePhase(state, cmd.now, true);
     }
     if (cmd.type === "forceAdvance") {
       if (!cmd.byHost) return reject(input, "not_host");
       if (cmd.gen !== state.phaseGen) return reject(input, "stale_advance");
-      return advancePhase(state, cmd.now);
+      return advancePhase(state, cmd.now, true);
     }
     if (cmd.type === "markAbsent" || cmd.type === "markPresent") {
       if (!cmd.byHost) return reject(input, "not_host", cmd.playerId);
@@ -123,6 +124,8 @@ export function applyCommand(input: GameState, cmd: Command): EngineResult {
     if (cmd.type === "submitAction") return submitAction(input, state, cmd);
     if (cmd.type === "castVote") return castVote(input, state, cmd.playerId, cmd.target, cmd.now);
     if (cmd.type === "retractVote") return retractVote(input, state, cmd.playerId);
+    if (cmd.type === "lockAction") return setMafiaLock(input, state, cmd.playerId, true, cmd.now);
+    if (cmd.type === "unlockAction") return setMafiaLock(input, state, cmd.playerId, false, cmd.now);
     return reject(input, "invalid_command");
   } catch {
     return reject(input, "invalid_command", "playerId" in cmd ? cmd.playerId : undefined);
@@ -134,7 +137,10 @@ function submitAction(original: GameState, state: GameState, cmd: Extract<Comman
   if (canSubmitMafiaVote(state, currentRoles(), cmd.playerId)) {
     if (!legalLivingTarget(state, cmd.playerId, cmd.targetId, false)) return reject(original, "illegal_target", cmd.playerId);
     state.mafiaVotes = state.mafiaVotes.filter((v) => v.playerId !== cmd.playerId);
-    state.mafiaVotes.push({ playerId: cmd.playerId, targetId: cmd.targetId });
+    // Changing/(re)submitting a target always resets locked to false (Spec
+    // 08): the voter is re-opening their choice, so partners see it's back
+    // in play, and readiness must not carry over a lock onto a new target.
+    state.mafiaVotes.push({ playerId: cmd.playerId, targetId: cmd.targetId, locked: false });
     state.log.push({ type: "actionSubmitted", actorId: cmd.playerId, actionType: "mafiaKill", targetId: cmd.targetId, day: state.day });
     return advanceIfComplete(state, [], cmd.now);
   }
@@ -146,6 +152,26 @@ function submitAction(original: GameState, state: GameState, cmd: Extract<Comman
   state.nightActions.push({ actorId: cmd.playerId, actionType: spec.actionType, targetId: cmd.targetId });
   state.log.push({ type: "actionSubmitted", actorId: cmd.playerId, actionType: spec.actionType, targetId: cmd.targetId, day: state.day });
   return advanceIfComplete(state, [], cmd.now);
+}
+
+/** `lock_action`/`unlock_action` (Spec 08). Phase-gate before role-gate (both
+ * reject safely, per the spec): a lock/unlock arriving once the night has
+ * already resolved (phase moved past "night") rejects as `not_lockable`,
+ * never silently ignored. Applies only to a living voter whose role is a
+ * mafia-consensus killer during night — anyone else (including a
+ * currently-absent killer, which `alive()`/`player.absent` in
+ * `applyCommand` already gate before we get here) also gets
+ * `not_lockable`. Locking with no target set (`targetId === null`) is
+ * `no_pick_to_lock`, distinct from `not_lockable`. */
+function setMafiaLock(original: GameState, state: GameState, playerId: string, locked: boolean, now?: number): EngineResult {
+  if (state.phase !== "night") return reject(original, "not_lockable", playerId);
+  if (!canSubmitMafiaVote(state, currentRoles(), playerId)) return reject(original, "not_lockable", playerId);
+  const vote = state.mafiaVotes.find((v) => v.playerId === playerId);
+  if (locked && (!vote || vote.targetId === null)) return reject(original, "no_pick_to_lock", playerId);
+  if (!vote) return reject(original, "not_lockable", playerId);
+  vote.locked = locked;
+  state.log.push({ type: locked ? "actionLocked" : "actionUnlocked", actorId: playerId, day: state.day });
+  return advanceIfComplete(state, [], now);
 }
 
 function castVote(original: GameState, state: GameState, playerId: string, target: VoteTarget, now?: number): EngineResult {
@@ -167,23 +193,29 @@ function retractVote(original: GameState, state: GameState, playerId: string): E
   return { state, effects: [] };
 }
 
+// Night mafia-kill readiness (Spec 08, the crux): the phase can only
+// complete NATURALLY once every living non-absent killer is LOCKED
+// (designated mode: only the designated killer's lock gates it — see
+// resolveConsensus) AND the ruleset's consensus rule actually converges on
+// a target. Tentative (unlocked) picks never make the phase ready — that's
+// what stops a stray matching tap from ending the night early. Unanimous
+// mode's "all locked but disagree" state is a real pin: `ready` alone is
+// NOT enough to advance — the phase must stay open ("keep deciding") until
+// either they reconcile or the host force-advances/times out (which reads
+// LOCKED-only plurality via `resolveLockedPlurality`, bypassing this gate
+// entirely). Majority/designated always converge once ready (a plurality/
+// the designated pick always exists), so this only ever blocks unanimous.
+function mafiaReady(state: GameState): boolean {
+  const killers = mafiaKillers(state, currentRoles());
+  const result = resolveConsensus(state.mafiaVotes, killers, state.ruleset.mafiaConsensus, { lockedOnly: true });
+  return result.ready && (result.converged || killers.length === 0);
+}
+
 function pendingNight(state: GameState): number {
   const individual = state.players.filter((p) => hasNightInput(state, currentRoles(), p.id) && !state.nightActions.some((a) => a.actorId === p.id)).length;
   const killers = mafiaKillers(state, currentRoles());
-  const mafiaPending = killers.length > 0 && resolveConsensusReached(state) ? 0 : killers.length > 0 ? 1 : 0;
+  const mafiaPending = killers.length > 0 && !mafiaReady(state) ? 1 : 0;
   return individual + mafiaPending;
-}
-
-function resolveConsensusReached(state: GameState): boolean {
-  const killers = mafiaKillers(state, currentRoles());
-  if (killers.length === 0) return true;
-  const votes = state.mafiaVotes.filter((v) => killers.some((p) => p.id === v.playerId) && v.targetId);
-  if (votes.length === 0) return false;
-  if (state.ruleset.mafiaConsensus === "designated") return votes.some((v) => v.playerId === killers.sort((a, b) => a.seat - b.seat)[0]!.id);
-  const counts = new Map<string, number>();
-  for (const vote of votes) counts.set(vote.targetId!, (counts.get(vote.targetId!) ?? 0) + 1);
-  const top = Math.max(...counts.values());
-  return state.ruleset.mafiaConsensus === "unanimous" ? top === killers.length : top > killers.length / 2;
 }
 
 function pendingVotes(state: GameState): number {
@@ -191,14 +223,21 @@ function pendingVotes(state: GameState): number {
 }
 
 function advanceIfComplete(state: GameState, effects: Effect[], now?: number): EngineResult {
-  if (state.phase === "night" && pendingNight(state) === 0) return advancePhase(state, now);
-  if ((state.phase === "day" || state.phase === "runoff") && pendingVotes(state) === 0) return advancePhase(state, now);
+  if (state.phase === "night" && pendingNight(state) === 0) return advancePhase(state, now, false);
+  if ((state.phase === "day" || state.phase === "runoff") && pendingVotes(state) === 0) return advancePhase(state, now, false);
   return withWin(state, effects);
 }
 
-function advancePhase(state: GameState, now?: number): EngineResult {
+/** `forced`: true only for the host force-advance / alarm timerExpired
+ * paths (Spec 08 amends Spec 02 v2.3) — night resolution then reads LOCKED
+ * votes by plurality regardless of the ruleset's consensus mode or whether
+ * it naturally converged, discarding tentative/unlocked picks entirely.
+ * `false` (the natural zero-pending-input advance) resolves through the
+ * ruleset's own consensus mode, which by construction only ever reaches
+ * this branch once `mafiaReady` already held. */
+function advancePhase(state: GameState, now?: number, forced = false): EngineResult {
   if (state.phase === "night") {
-    const resolved = resolveNight(clone(state), currentRoles());
+    const resolved = resolveNight(clone(state), currentRoles(), forced);
     return withWin(resolved, transition(resolved, "dawn", now));
   }
   if (state.phase === "dawn") return withWin(state, transition(state, "day", now));

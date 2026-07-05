@@ -4,6 +4,7 @@
 // untouched — this is a separate component for the host identity only.
 import type { ClientRoomState } from "../../../shared/protocol";
 import { Button } from "../../components/ui/button";
+import HelpButton from "../../components/HelpButton";
 import { HOUSE_RULESET } from "../../lib/houseRuleset";
 import { HOUSE_RULES, validateRuleset } from "../../../engine";
 import { hostSeatRows } from "../../store/hostView";
@@ -66,7 +67,10 @@ export default function HostLobby({
     <main className="safe-top safe-bottom safe-x mx-auto flex min-h-dvh w-full max-w-3xl flex-col items-center gap-6 bg-ink p-6 text-bone">
       <div className="flex w-full items-center justify-between gap-2">
         <h1 className="font-display text-3xl text-blood">Host console</h1>
-        <PrivacyChip />
+        <div className="flex items-center gap-2">
+          <HelpButton />
+          <PrivacyChip />
+        </div>
       </div>
 
       <div className="flex items-center gap-3">

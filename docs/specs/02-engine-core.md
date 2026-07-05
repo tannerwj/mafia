@@ -1,5 +1,18 @@
 # Spec 02 — Game engine core (pure TS)
 
+**v2.8 — 2026-07-05 · Status: approved (amended by Spec 08)**
+*v2.8 (Spec 08 — team lock-in voting): mafia faction votes gain a `locked`
+flag. Three pins here are AMENDED by Spec 08 §Lock-in (read it for the full
+rule): (a) night mafia-kill readiness is now "all living non-absent killers
+LOCKED", not "submitted"; (b) the force-advance/timer fallback resolves from
+LOCKED votes only ("plurality among submitted" → "plurality among locked" —
+the four force/timer tests in test/engine that submit-without-locking must
+be updated to lock first); (c) host `acted` (v2.7) counts a mafia killer as
+acted only once LOCKED (tentative = pending); (d) `factionVotes` (v2.6) now
+covers ALL living killers (undecided → targetId null) and each entry gains
+`locked`, and `you.lockedCount: number` is added. Non-mafia/individual
+action semantics are unchanged.*
+
 **v2.7 — 2026-07-04 · Status: approved for build**
 *v2.7 (Spec 05 build fallout): the host projection never populated a
 per-seat night-action-submission signal — the host player table's

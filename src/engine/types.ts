@@ -32,6 +32,12 @@ export interface SubmittedAction {
   targetId: PlayerId | null;
 }
 
+export interface MafiaVote {
+  playerId: PlayerId;
+  targetId: PlayerId | null;
+  locked: boolean;
+}
+
 export interface InvestigationResult {
   day: number;
   actorId: PlayerId;
@@ -58,7 +64,7 @@ export interface GameState {
   phaseGen: number;
   log: GameEvent[];
   nightActions: SubmittedAction[];
-  mafiaVotes: { playerId: PlayerId; targetId: PlayerId | null }[];
+  mafiaVotes: MafiaVote[];
   votes: { playerId: PlayerId; target: VoteTarget }[];
   runoffCandidates: PlayerId[] | null;
   investigationResults: InvestigationResult[];
@@ -71,6 +77,8 @@ export type Command =
   | { type: "submitAction"; playerId: PlayerId; actionType?: NightActionType; targetId: PlayerId | null; now?: number }
   | { type: "castVote"; playerId: PlayerId; target: VoteTarget; now?: number }
   | { type: "retractVote"; playerId: PlayerId; now?: number }
+  | { type: "lockAction"; playerId: PlayerId; now?: number }
+  | { type: "unlockAction"; playerId: PlayerId; now?: number }
   | { type: "forceAdvance"; byHost?: boolean; gen: number; now?: number }
   | { type: "timerExpired"; at: number; now?: number }
   | { type: "markAbsent"; byHost?: boolean; playerId: PlayerId; now?: number }

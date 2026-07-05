@@ -56,6 +56,19 @@ async function submitNightTarget(page: Page, targetName: string) {
   await page.getByTestId("night-target-option").filter({ hasText: targetName }).click();
 }
 
+// Spec 08: `lock-in-button` is disabled until the server confirms the
+// voter's own pending target (`you.pendingAction`), NOT merely once the
+// local click-selection styling applies -- clicking it before that
+// round-trip lands is a real race (observed: the click can silently no-op
+// on a still-disabled button). Waiting for the enabled state first makes
+// this deterministic.
+async function submitAndLockMafiaTarget(page: Page, targetName: string) {
+  await submitNightTarget(page, targetName);
+  const lockButton = page.getByTestId("lock-in-button");
+  await expect(lockButton).toBeEnabled();
+  await lockButton.click();
+}
+
 // RoleReveal (Radix Dialog) auto-dismisses 5s after assignment; its overlay
 // sits above the night-action drawer and intercepts pointer events until it
 // actually closes. A real player waits this out (or dismisses it) before
@@ -141,13 +154,20 @@ test.describe("scenario A: mafia converge, angel save, failed-attack dawn messag
     }
     await submitNightTarget(bob, "Carol");
     await submitNightTarget(erin, "Carol");
-    await submitNightTarget(dave, "Carol");
-    await submitNightTarget(alice, "Bob");
 
     // Mafia consensus state is visible only to mafia, from their own
-    // `you.factionVotes`/`you.consensusReached` — never a fabricated
-    // pending-count for anyone else.
+    // `you.factionVotes`/`you.consensusReached`/`you.lockedCount` — never a
+    // fabricated pending-count for anyone else. Both tentative picks match,
+    // but consensus is NOT reached until both lock in (Spec 08).
+    await expect(bob.getByTestId("mafia-consensus")).toHaveAttribute("data-consensus-reached", "false");
+    await expect(bob.getByTestId("lock-in-button")).toBeEnabled();
+    await bob.getByTestId("lock-in-button").click();
+    await expect(erin.getByTestId("lock-in-button")).toBeEnabled();
+    await erin.getByTestId("lock-in-button").click();
     await expect(bob.getByTestId("mafia-consensus")).toHaveAttribute("data-consensus-reached", "true");
+
+    await submitNightTarget(dave, "Carol");
+    await submitNightTarget(alice, "Bob");
 
     await waitForPhase(alice, "dawn", 25_000);
     await expect(alice.getByTestId("interstitial-lines")).toContainText("attack failed");
@@ -183,7 +203,7 @@ test.describe("scenario A: mafia converge, angel save, failed-attack dawn messag
     await expect(alice.getByTestId("game-screen")).not.toHaveAttribute("data-phase", "ended");
 
     // Night 2: the remaining mafia (Erin) kills Carol -- no save this time.
-    await submitNightTarget(erin, "Carol");
+    await submitAndLockMafiaTarget(erin, "Carol");
     await submitNightTarget(dave, "Alice");
     await submitNightTarget(alice, "Erin");
 
@@ -278,7 +298,11 @@ test.describe("scenario B: suicide-bomber loss variant", () => {
       await waitForRoleRevealToClose(p);
     }
     await submitNightTarget(alice, "Dave");
+    await expect(alice.getByTestId("lock-in-button")).toBeEnabled();
+    await alice.getByTestId("lock-in-button").click();
     await submitNightTarget(erin, "Dave");
+    await expect(erin.getByTestId("lock-in-button")).toBeEnabled();
+    await erin.getByTestId("lock-in-button").click();
     await submitNightTarget(carol, "Dave");
     await submitNightTarget(dave, "Alice");
 
@@ -367,7 +391,11 @@ test.describe("scenario C: village-win variant", () => {
       await waitForRoleRevealToClose(p);
     }
     await submitNightTarget(alice, "Dave");
+    await expect(alice.getByTestId("lock-in-button")).toBeEnabled();
+    await alice.getByTestId("lock-in-button").click();
     await submitNightTarget(bob, "Dave");
+    await expect(bob.getByTestId("lock-in-button")).toBeEnabled();
+    await bob.getByTestId("lock-in-button").click();
     await submitNightTarget(erin, "Dave");
     await submitNightTarget(carol, "Alice");
 
@@ -398,7 +426,7 @@ test.describe("scenario C: village-win variant", () => {
     // Night 2: remaining mafia (Bob) targets Carol; angel (Erin) protects
     // Carol this time -> the attack fails. Dave (suicide_bomber) has no
     // night action -- idle "town sleeps" state, nothing to submit.
-    await submitNightTarget(bob, "Carol");
+    await submitAndLockMafiaTarget(bob, "Carol");
     await submitNightTarget(erin, "Carol");
 
     await waitForPhase(carol, "dawn", 25_000);

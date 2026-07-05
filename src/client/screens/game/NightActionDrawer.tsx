@@ -19,7 +19,7 @@ import { Drawer } from "vaul";
 import { useState } from "react";
 import type { ClientGameView } from "../../../shared/game-view";
 import type { ClientPlayerView } from "../../../shared/protocol";
-import { submitAction } from "../../store/gameStore";
+import { lockAction, submitAction, unlockAction } from "../../store/gameStore";
 
 function TargetList({
   candidates,
@@ -94,6 +94,50 @@ function MafiaRoster({
   );
 }
 
+function TeammatePicks({
+  factionVotes,
+  you,
+  playerNames,
+}: {
+  factionVotes: NonNullable<NonNullable<ClientGameView["you"]>["factionVotes"]>;
+  you: NonNullable<ClientGameView["you"]>;
+  playerNames: Map<string, string>;
+}) {
+  return (
+    <div
+      data-testid="mafia-teammate-picks"
+      className="flex flex-col gap-1 rounded-md border border-smoke/60 bg-ink-3 p-3 text-sm"
+    >
+      <p className="mb-1 text-xs uppercase tracking-widest text-smoke">
+        Tonight's picks
+      </p>
+      <ul className="flex flex-col gap-1">
+        {factionVotes.map((v) => {
+          const isYou = v.voterId === you.playerId;
+          const label = v.targetId ? (playerNames.get(v.targetId) ?? v.targetId) : "deciding…";
+          return (
+            <li
+              key={v.voterId}
+              data-testid="mafia-teammate-pick"
+              data-voter-id={v.voterId}
+              data-target-id={v.targetId ?? ""}
+              data-locked={v.locked}
+              className="flex items-center justify-between gap-2"
+            >
+              <span className="text-bone">
+                {isYou ? "You" : (playerNames.get(v.voterId) ?? v.voterId)}
+              </span>
+              <span className={v.targetId ? "text-bone/80" : "text-smoke italic"}>
+                {label} {v.locked ? "✓" : v.targetId ? "(tentative)" : ""}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 function MafiaNightPanel({
   you,
   players,
@@ -104,19 +148,24 @@ function MafiaNightPanel({
   playerNames: Map<string, string>;
 }) {
   const myTarget = you.pendingAction?.targetId ?? null;
+  const factionVotes = you.factionVotes ?? [];
+  const myVote = factionVotes.find((v) => v.voterId === you.playerId);
+  const iAmLocked = myVote?.locked ?? false;
   const candidates = players
     .filter((p) => p.alive && p.id !== you.playerId)
     .map((p) => ({ id: p.id, name: playerNames.get(p.id) ?? p.id }));
 
-  // `you.factionVotes` (`state.mafiaVotes` filtered to killers) only
-  // contains entries for partners who have ALREADY submitted a vote — it
-  // starts empty and grows, so its own length undercounts the denominator
-  // ("0 of 0 partners" when nobody has voted yet, instead of "0 of N").
-  // `you.mafiaRoster` (Spec 02 v2.6) is the actual living-killer roster
-  // (partners, self excluded) and is the correct denominator: total living
-  // killers = roster + self.
-  const totalKillers = (you.mafiaRoster?.length ?? 0) + 1;
-  const votedCount = (you.factionVotes ?? []).filter((v) => v.targetId).length;
+  // `factionVotes` (Spec 08) covers every living, non-absent killer
+  // (including self) — its length IS the total killer count, never a
+  // picked-count proxy.
+  const totalKillers = factionVotes.length;
+  const lockedCount = you.lockedCount ?? factionVotes.filter((v) => v.locked).length;
+  const allLocked = totalKillers > 0 && lockedCount === totalKillers;
+  const statusText = you.consensusReached
+    ? "Consensus reached."
+    : allLocked
+      ? "Everyone's locked in, but you don't agree — keep deciding."
+      : `${lockedCount} of ${totalKillers} locked · waiting…`;
 
   return (
     <div className="flex flex-col gap-4">
@@ -126,18 +175,31 @@ function MafiaNightPanel({
         selectedId={myTarget}
         onPick={(id) => submitAction(id)}
       />
+      <button
+        type="button"
+        data-testid="lock-in-button"
+        disabled={!myTarget}
+        onClick={() => (iAmLocked ? unlockAction() : lockAction())}
+        className={`min-h-11 rounded-md border px-4 py-3 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+          iAmLocked
+            ? "border-brass bg-ink-3 text-brass"
+            : "border-smoke bg-ink-2 text-bone"
+        }`}
+      >
+        {iAmLocked ? "Unlock" : "Lock in"}
+      </button>
       <div
         data-testid="mafia-consensus"
         data-consensus-reached={you.consensusReached ?? false}
+        data-locked-count={lockedCount}
+        data-total-killers={totalKillers}
         className="rounded-md border border-smoke/60 bg-ink-3 p-3 text-sm"
       >
-        <p className="text-smoke">
-          {votedCount} of {totalKillers} partners have chosen.
-        </p>
         <p className={you.consensusReached ? "text-brass" : "text-smoke"}>
-          {you.consensusReached ? "Consensus reached." : "Awaiting consensus…"}
+          {statusText}
         </p>
       </div>
+      <TeammatePicks factionVotes={factionVotes} you={you} playerNames={playerNames} />
       {you.mafiaRoster && (
         <MafiaRoster mafiaRoster={you.mafiaRoster} playerNames={playerNames} />
       )}

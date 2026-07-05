@@ -262,3 +262,25 @@
   green + live tour; E2E flake is environmental, not a defect (same as
   Spec 04). Kill zombies + wipe .wrangler/state + workers=1 for clean E2E.
 - Remaining: Spec 06 (ruleset editor) → live multi-browser demo. Then done.
+
+## 2026-07-05 — DEPLOYED to mafia.tannerwj.com; playtest hotfixes + Spec 08
+- Deployed the full game live (versions bccff514 → ae0f857e → 786d7d57).
+  Owned the credentialed deploy directly (not delegated); Opus deploy-review
+  (B1 binding-rename = false alarm, disproven by successful deploy; S1
+  unguarded claim .json = real, fixed). Prod-verified: full wss game,
+  seed-ignored integrity, SPA/API.
+- Playtest bug hotfix (300dc2d, deployed 786d7d57): share link failed
+  silently on mobile (clipboard rejects, void-swallowed) → shareOrCopyLink
+  (native share → clipboard → visible manual URL); start gate MIN_PLAYERS=3
+  was wrong (house needs 5) → derived from validateRuleset. Both live-
+  verified on a phone viewport. LESSON (write into practice): E2E that
+  navigates to room URLs directly + clicks by testid never exercised the
+  Share button or the real gate — always drive the actual affordance a human
+  uses, on the real viewport.
+- Spec 08 (playtest feedback) drafted + adversarially reviewed + folded to
+  v2, approved: mafia tentative→lock-in with live per-teammate picks (kill
+  resolves only when all killers LOCKED + agree; force/timer → plurality of
+  LOCKED — amends Spec 02 to v2.8; 4 engine tests must be updated); always-
+  accessible one-tap "My Role" (privacy-preserving) + instructions modal
+  (reuse roleCopy.ts). Review disproved its own hang/absence/designated
+  worries against current code. Next: build Spec 08 → verify → deploy.

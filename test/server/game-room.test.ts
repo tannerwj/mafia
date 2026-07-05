@@ -766,6 +766,10 @@ describe("full scripted game over real WebSockets", () => {
     sendGame(game.angel.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
     await drainSnapshots(game);
     sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    await drainSnapshots(game);
+    // Spec 08: the sole mafia must LOCK its pick before the night can
+    // complete naturally — submitting alone leaves the phase pending.
+    sendGame(game.mafia.ws, { type: "lock_action" });
     const afterNight1 = await drainSnapshots(game);
 
     expect(afterNight1.detective.phase).toBe("dawn");
@@ -812,6 +816,8 @@ describe("full scripted game over real WebSockets", () => {
     sendGame(game.angel.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
     await drainSnapshots(game);
     sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.mafia.ws, { type: "lock_action" });
     const afterNight2 = await drainSnapshots(game);
 
     expect(afterNight2.detective.phase).toBe("dawn");
@@ -867,6 +873,11 @@ describe("mid-game hibernation and rejoin", () => {
     sendGame(game.angel.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
     await drainSnapshots(game);
     sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    await drainSnapshots(game);
+    // Spec 08: the mafia's pre-eviction pick survived (state persisted
+    // opaquely) but is still only tentative — lock it in post-eviction to
+    // prove the lock command applies cleanly against the reconstructed DO.
+    sendGame(game.mafia.ws, { type: "lock_action" });
     const afterNight1 = await drainSnapshots(game);
 
     expect(afterNight1.detective.phase).toBe("dawn");
@@ -934,9 +945,12 @@ describe("timer path and stale-alarm no-op", () => {
     await drainSnapshots(game);
     sendGame(game.angel.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
     await drainSnapshots(game);
-    // The detective's action is the last pending night input — a player,
-    // not the host, triggers the night -> dawn transition.
     sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    await drainSnapshots(game);
+    // Spec 08: the mafia's lock-in (not its submit) is the last pending
+    // night input now — a player, not the host, still triggers the night ->
+    // dawn transition.
+    sendGame(game.mafia.ws, { type: "lock_action" });
     const afterNight1 = await drainSnapshots(game);
     expect(afterNight1.detective.phase).toBe("dawn");
 
@@ -1279,6 +1293,8 @@ describe("player order is join order, always", () => {
     sendGame(game.angel.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
     await drainSnapshots(game);
     sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.mafia.ws, { type: "lock_action" });
     const afterNight1 = await drainSnapshots(game);
 
     expect(afterNight1.detective.players.map((p) => p.id)).toEqual(expectedOrder);
@@ -1342,6 +1358,136 @@ describe("wake recovery: gameDeadlineAt", () => {
 
     const afterTimeout = await drainSnapshots(game);
     expect(afterTimeout.detective.phase).toBe("dawn");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+});
+
+describe("Spec 08: lock_action/unlock_action", () => {
+  test("lock/unlock round-trip: submit -> lock -> unlock -> lock, projected locked state flips each time", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+
+    sendGame(game.mafia.ws, { type: "submit_action", action: { targetId: game.villager2.playerId } });
+    await drainSnapshots(game);
+
+    sendGame(game.mafia.ws, { type: "lock_action" });
+    const afterLock = await drainSnapshots(game);
+    expect(afterLock.mafia.game?.you?.factionVotes?.[0]).toMatchObject({ locked: true, targetId: game.villager2.playerId });
+
+    sendGame(game.mafia.ws, { type: "unlock_action" });
+    const afterUnlock = await drainSnapshots(game);
+    expect(afterUnlock.mafia.game?.you?.factionVotes?.[0]).toMatchObject({ locked: false, targetId: game.villager2.playerId });
+    // Unlocking alone (sole killer) reopens the night — it must not have
+    // resolved from the earlier lock.
+    expect(afterUnlock.mafia.phase).toBe("night");
+
+    sendGame(game.mafia.ws, { type: "lock_action" });
+    const afterRelock = await drainSnapshots(game);
+    expect(afterRelock.mafia.game?.you?.factionVotes?.[0]).toMatchObject({ locked: true, targetId: game.villager2.playerId });
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("night resolves only after all killers lock — tentative submissions never end the night", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+
+    sendGame(game.mafia.ws, { type: "submit_action", action: { targetId: game.villager2.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.angel.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    const afterAllSubmitted = await drainSnapshots(game);
+    // Everyone has submitted, but the sole mafia hasn't locked -> still night.
+    expect(afterAllSubmitted.detective.phase).toBe("night");
+
+    sendGame(game.mafia.ws, { type: "lock_action" });
+    const afterLock = await drainSnapshots(game);
+    expect(afterLock.detective.phase).toBe("dawn");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("authority: a non-killer's lock_action/unlock_action is rejected not_lockable", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+
+    sendGame(game.villager1.ws, { type: "lock_action" });
+    const rejection1 = (await nextMessageOfType(game.villager1.ws, "rejection")) as RejectionMessage;
+    expect(rejection1.code).toBe("not_lockable");
+
+    sendGame(game.angel.ws, { type: "unlock_action" });
+    const rejection2 = (await nextMessageOfType(game.angel.ws, "rejection")) as RejectionMessage;
+    expect(rejection2.code).toBe("not_lockable");
+
+    // The host socket has no playerId at all -> also rejected, never a crash.
+    sendGame(game.hostWs, { type: "lock_action" });
+    const rejection3 = (await nextMessageOfType(game.hostWs, "rejection")) as RejectionMessage;
+    expect(rejection3.code).toBe("not_a_player");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("lock_action with no pick set is rejected no_pick_to_lock", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+
+    sendGame(game.mafia.ws, { type: "lock_action" });
+    const rejection = (await nextMessageOfType(game.mafia.ws, "rejection")) as RejectionMessage;
+    expect(rejection.code).toBe("no_pick_to_lock");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("lock_action/unlock_action arriving after the night has already resolved are rejected, never silently ignored", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+
+    sendGame(game.mafia.ws, { type: "submit_action", action: { targetId: game.villager2.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.mafia.ws, { type: "lock_action" });
+    await drainSnapshots(game);
+    sendGame(game.angel.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    const afterNight1 = await drainSnapshots(game);
+    expect(afterNight1.detective.phase).toBe("dawn");
+
+    // Night has already resolved (phase moved to dawn) — a late lock/unlock
+    // from the same mafia socket must be rejected, not silently swallowed.
+    sendGame(game.mafia.ws, { type: "lock_action" });
+    const rejection1 = (await nextMessageOfType(game.mafia.ws, "rejection")) as RejectionMessage;
+    expect(rejection1.code).toBe("not_lockable");
+
+    sendGame(game.mafia.ws, { type: "unlock_action" });
+    const rejection2 = (await nextMessageOfType(game.mafia.ws, "rejection")) as RejectionMessage;
+    expect(rejection2.code).toBe("not_lockable");
 
     game.hostWs.close();
     game.angel.ws.close();
