@@ -13,11 +13,16 @@ export default function SeatPicker({
 }) {
   const [name, setName] = useState("");
   const [showJoinNew, setShowJoinNew] = useState(backups.length === 0);
+  const [nameError, setNameError] = useState<string | null>(null);
 
   function submitJoinNew(event: React.FormEvent) {
     event.preventDefault();
     const trimmed = name.trim();
-    if (trimmed.length === 0) return;
+    if (trimmed.length === 0) {
+      setNameError("Enter a name before joining.");
+      return;
+    }
+    setNameError(null);
     onJoinAsNew(trimmed);
   }
 
@@ -62,7 +67,10 @@ export default function SeatPicker({
           <input
             data-testid="join-name-input"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value);
+              if (nameError) setNameError(null);
+            }}
             maxLength={20}
             placeholder="Subject name"
             autoFocus
@@ -71,6 +79,11 @@ export default function SeatPicker({
           <Button type="submit" variant="brass" data-testid="join-name-submit" className="w-full">
             Join
           </Button>
+          {nameError && (
+            <p data-testid="join-name-error" className="text-center text-sm text-blood">
+              {nameError}
+            </p>
+          )}
           {backups.length > 0 && (
             <button
               type="button"

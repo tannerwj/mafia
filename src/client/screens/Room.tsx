@@ -40,7 +40,8 @@ type Phase =
   | { name: "picking-seat" }
   | { name: "connected"; isHost: boolean }
   | { name: "kicked" }
-  | { name: "bad-credential" };
+  | { name: "bad-credential" }
+  | { name: "not-found" };
 
 export default function Room({ code }: { code: string }) {
   const [phase, setPhase] = useState<Phase>({ name: "resolving-auth" });
@@ -66,44 +67,82 @@ export default function Room({ code }: { code: string }) {
   // backups). This runs once per room code.
   useEffect(() => {
     setPhase({ name: "resolving-auth" });
+    let cancelled = false;
 
-    const sessionHostKey = getSessionHostKey(code);
-    const sessionSeat = getSessionSeat(code);
+    function resolveAuth() {
+      const sessionHostKey = getSessionHostKey(code);
+      const sessionSeat = getSessionSeat(code);
 
-    // Dual-credential pin: both a hostKey and a seatToken exist for this
-    // room (a creator who also joined as a player from the same device) —
-    // never auto-pick by storage-read order, always ask.
-    if (sessionHostKey && sessionSeat) {
-      const backups = getSeatBackups(code);
-      const seatName = backups.find((b) => b.seatToken === sessionSeat)?.name ?? "your seat";
-      setPhase({
-        name: "choosing-identity",
-        hostKey: sessionHostKey,
-        seatToken: sessionSeat,
-        seatName,
-      });
-      return () => disconnect();
-    }
+      // Dual-credential pin: both a hostKey and a seatToken exist for this
+      // room (a creator who also joined as a player from the same device) —
+      // never auto-pick by storage-read order, always ask.
+      if (sessionHostKey && sessionSeat) {
+        const backups = getSeatBackups(code);
+        const seatName = backups.find((b) => b.seatToken === sessionSeat)?.name ?? "your seat";
+        setPhase({
+          name: "choosing-identity",
+          hostKey: sessionHostKey,
+          seatToken: sessionSeat,
+          seatName,
+        });
+        return;
+      }
 
-    let auth: Auth | null = null;
-    if (sessionHostKey) {
-      auth = { kind: "host", hostKey: sessionHostKey };
-    } else if (sessionSeat) {
-      auth = { kind: "seat", seatToken: sessionSeat };
-    }
+      let auth: Auth | null = null;
+      if (sessionHostKey) {
+        auth = { kind: "host", hostKey: sessionHostKey };
+      } else if (sessionSeat) {
+        auth = { kind: "seat", seatToken: sessionSeat };
+      }
 
-    if (auth) {
-      doConnect(auth);
-    } else {
-      const hostBackup = getHostKeyBackup(code);
-      if (hostBackup) {
-        setPhase({ name: "offering-host-recovery", hostKey: hostBackup });
+      if (auth) {
+        doConnect(auth);
       } else {
-        setPhase({ name: "picking-seat" });
+        const hostBackup = getHostKeyBackup(code);
+        if (hostBackup) {
+          setPhase({ name: "offering-host-recovery", hostKey: hostBackup });
+        } else {
+          setPhase({ name: "picking-seat" });
+        }
       }
     }
 
+    // The normal auth path (seat picker / auto-connect) starts immediately,
+    // same as before this existence check existed — the happy path must not
+    // wait on a network round trip just to catch the rare bad-code case.
+    resolveAuth();
+
+    // A direct/pasted-link visit to a room code that was never claimed (or
+    // has since expired — Spec 01's ABSOLUTE_TTL_MS/EMPTY_LOBBY_TTL_MS) must
+    // not silently hang: the WS upgrade the auth path above would otherwise
+    // open just 404s at the DO and retries forever under RoomConnection's
+    // normal backoff, since a failed upgrade isn't a terminal close code.
+    // Race this REST existence check alongside it and override to a clear
+    // not-found screen if the room turns out not to exist.
+    fetch(`/api/rooms/${encodeURIComponent(code)}`)
+      .then(async (res) => {
+        if (cancelled) return;
+        if (res.status === 404) {
+          setPhase({ name: "not-found" });
+          return;
+        }
+        const meta = (await res.json().catch(() => null)) as
+          | { exists: boolean }
+          | null;
+        if (!res.ok || !meta || meta.exists === false) {
+          setPhase({ name: "not-found" });
+        }
+        // Room exists: the auth path already started above, nothing more to do.
+      })
+      .catch(() => {
+        // Network failure looking up the room: say nothing and let the
+        // normal auth/connect path (with its own reconnect/backoff) be the
+        // arbiter — it's a fairer judge of a transient network issue than
+        // this one-off GET.
+      });
+
     return () => {
+      cancelled = true;
       disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -186,6 +225,20 @@ export default function Room({ code }: { code: string }) {
   }
 
   const backups = useMemo(() => getSeatBackups(code), [code, phase.name]);
+
+  if (phase.name === "not-found") {
+    return (
+      <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-5 bg-ink p-6 text-paper">
+        <span className="stamp stamp-red text-sm">No such file</span>
+        <p data-testid="room-not-found" className="text-center text-lg">
+          No case file with that code — check it and try again.
+        </p>
+        <Button type="button" variant="brass" onClick={() => navigate("/")}>
+          Back to the office
+        </Button>
+      </main>
+    );
+  }
 
   if (phase.name === "kicked") {
     return (

@@ -6,6 +6,7 @@ import { navigate } from "../useRoute";
 export default function Home() {
   const [joinCode, setJoinCode] = useState("");
   const [creating, setCreating] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function createRoom() {
@@ -34,11 +35,32 @@ export default function Home() {
     }
   }
 
-  function joinRoom(event: React.FormEvent) {
+  async function joinRoom(event: React.FormEvent) {
     event.preventDefault();
     const code = joinCode.trim().toUpperCase();
     if (code.length === 0) return;
-    navigate(`/room/${code}`);
+    setChecking(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/rooms/${encodeURIComponent(code)}`);
+      if (res.status === 404) {
+        setError("No case file with that code — check it and try again.");
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(`Could not look up that case file (${res.status}).`);
+      }
+      const meta = (await res.json()) as { exists: boolean };
+      if (!meta.exists) {
+        setError("No case file with that code — check it and try again.");
+        return;
+      }
+      navigate(`/room/${code}`);
+    } catch {
+      setError("Could not reach the office — check your connection and try again.");
+    } finally {
+      setChecking(false);
+    }
   }
 
   return (
@@ -94,9 +116,10 @@ export default function Home() {
           type="submit"
           data-testid="join-room"
           variant="outline"
+          disabled={checking}
           className="w-full"
         >
-          Pull the file
+          {checking ? "Checking the file…" : "Pull the file"}
         </Button>
       </form>
 
