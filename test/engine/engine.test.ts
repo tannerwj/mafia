@@ -428,4 +428,49 @@ describe("engine core", () => {
       expect(projectFor(s, { kind: "player", id: villager.id }).you?.currentVote).toBeUndefined();
     }
   });
+
+  test("projection: host-only players[].acted tracks night-action submission, undefined for non-actors, leak-free elsewhere", () => {
+    let s = start(5, rules({ mafia: 1, detective: 1, angel: 1, villager: 2 }), 9);
+    const mafia = byRole(s, "mafia");
+    const detective = byRole(s, "detective");
+    const villager = byRole(s, "villager");
+
+    const seatIn = (view: ReturnType<typeof projectFor>, id: string) => view.players.find((p) => p.id === id);
+
+    // Actor (detective) hasn't submitted yet: host sees acted === false.
+    let hostView = projectFor(s, { kind: "host" });
+    expect(seatIn(hostView, detective.id)?.acted).toBe(false);
+
+    // Villager is not an actor this phase: undefined, never a fabricated false.
+    const villagerSeat = seatIn(hostView, villager.id);
+    expect("acted" in (villagerSeat ?? {}) ? villagerSeat!.acted : undefined).toBeUndefined();
+
+    // Mafia consensus participant also starts false (owes the kill-vote).
+    expect(seatIn(hostView, mafia.id)?.acted).toBe(false);
+
+    // Detective submits -> host sees acted flip to true.
+    s = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: villager.id }).state;
+    hostView = projectFor(s, { kind: "host" });
+    expect(seatIn(hostView, detective.id)?.acted).toBe(true);
+    // Mafia hasn't voted yet: still false.
+    expect(seatIn(hostView, mafia.id)?.acted).toBe(false);
+
+    // Mafia submits its kill-vote -> host sees acted flip to true too.
+    s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: villager.id }).state;
+    hostView = projectFor(s, { kind: "host" });
+    expect(seatIn(hostView, mafia.id)?.acted).toBe(true);
+
+    // Leak check: player and public projections never carry acted for any
+    // seat, including the actor's own seat in their own projection.
+    const detectiveOwnView = projectFor(s, { kind: "player", id: detective.id });
+    for (const p of detectiveOwnView.players) expect(p.acted).not.toBe(true), expect(p.acted).not.toBe(false);
+    const publicView = projectFor(s, { kind: "public" });
+    for (const p of publicView.players) expect(p.acted).not.toBe(true), expect(p.acted).not.toBe(false);
+
+    // Leak check: a dead player's god view is resolved-only — no acted leak
+    // for the current unresolved night phase either.
+    const deadState = { ...s, players: s.players.map((p) => (p.id === villager.id ? { ...p, alive: false } : p)) };
+    const deadVillagerView = projectFor(deadState, { kind: "player", id: villager.id });
+    for (const p of deadVillagerView.players) expect(p.acted).not.toBe(true), expect(p.acted).not.toBe(false);
+  });
 });

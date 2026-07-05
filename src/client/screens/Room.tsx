@@ -16,11 +16,24 @@ import { useGameStore } from "../store/gameStore";
 import { navigate } from "../useRoute";
 import ConnectionBanner from "./ConnectionBanner";
 import GameScreen from "./game/GameScreen";
+import HostGame from "./host/HostGame";
+import HostGameEnd from "./host/HostGameEnd";
+import HostLobby from "./host/HostLobby";
+import IdentityChooser from "./IdentityChooser";
 import Lobby from "./Lobby";
 import SeatPicker from "./SeatPicker";
 
 type Phase =
   | { name: "resolving-auth" }
+  // Dual-credential pin (Spec 05 D-conventions): this browser holds both a
+  // hostKey and a seatToken for this room — `hello` must present exactly the
+  // chosen one, never auto-picked by storage-read order.
+  | { name: "choosing-identity"; hostKey: string; seatToken: string; seatName: string }
+  // Host-key recovery pin: localStorage holds this room's hostKey backup but
+  // THIS session doesn't (e.g. a dead host phone, a fresh tab) — offer an
+  // explicit "Resume as host" action rather than silently auto-connecting
+  // with a credential the current session never actually held.
+  | { name: "offering-host-recovery"; hostKey: string }
   | { name: "picking-seat" }
   | { name: "connected"; isHost: boolean }
   | { name: "kicked" }
@@ -41,30 +54,46 @@ export default function Room({ code }: { code: string }) {
   const disconnect = useGameStore((s) => s.disconnect);
   const send = useGameStore((s) => s.send);
 
-  // Resolve initial auth: session seat/hostKey > nothing (seat picker offers
-  // localStorage backups). This runs once per room code.
+  // Resolve initial auth: dual-credential chooser > session seat/hostKey >
+  // host-key recovery offer > seat picker (which offers localStorage
+  // backups). This runs once per room code.
   useEffect(() => {
     setPhase({ name: "resolving-auth" });
 
     const sessionHostKey = getSessionHostKey(code);
     const sessionSeat = getSessionSeat(code);
 
+    // Dual-credential pin: both a hostKey and a seatToken exist for this
+    // room (a creator who also joined as a player from the same device) —
+    // never auto-pick by storage-read order, always ask.
+    if (sessionHostKey && sessionSeat) {
+      const backups = getSeatBackups(code);
+      const seatName = backups.find((b) => b.seatToken === sessionSeat)?.name ?? "your seat";
+      setPhase({
+        name: "choosing-identity",
+        hostKey: sessionHostKey,
+        seatToken: sessionSeat,
+        seatName,
+      });
+      return () => disconnect();
+    }
+
     let auth: Auth | null = null;
     if (sessionHostKey) {
       auth = { kind: "host", hostKey: sessionHostKey };
     } else if (sessionSeat) {
       auth = { kind: "seat", seatToken: sessionSeat };
-    } else {
-      const hostBackup = getHostKeyBackup(code);
-      if (hostBackup) {
-        auth = { kind: "host", hostKey: hostBackup };
-      }
     }
 
     if (auth) {
       doConnect(auth);
     } else {
-      setPhase({ name: "picking-seat" });
+      const hostBackup = getHostKeyBackup(code);
+      if (hostBackup) {
+        setPhase({ name: "offering-host-recovery", hostKey: hostBackup });
+      } else {
+        setPhase({ name: "picking-seat" });
+      }
     }
 
     return () => {
@@ -111,6 +140,18 @@ export default function Room({ code }: { code: string }) {
     doConnect({ kind: "seat", seatToken });
   }
 
+  function handleChooseHost(hostKey: string) {
+    doConnect({ kind: "host", hostKey });
+  }
+
+  function handleChoosePlayer(seatToken: string) {
+    doConnect({ kind: "seat", seatToken });
+  }
+
+  function handleResumeAsHost(hostKey: string) {
+    doConnect({ kind: "host", hostKey });
+  }
+
   function handleKick(playerId: string) {
     send({ type: "kick", playerId });
   }
@@ -150,6 +191,44 @@ export default function Room({ code }: { code: string }) {
     );
   }
 
+  if (phase.name === "choosing-identity") {
+    const { hostKey, seatToken, seatName } = phase;
+    return (
+      <IdentityChooser
+        playerName={seatName}
+        onChooseHost={() => handleChooseHost(hostKey)}
+        onChoosePlayer={() => handleChoosePlayer(seatToken)}
+      />
+    );
+  }
+
+  if (phase.name === "offering-host-recovery") {
+    return (
+      <main className="safe-top safe-bottom safe-x mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-6 bg-ink p-6 text-bone">
+        <h1 className="font-display text-2xl text-blood">Resume hosting?</h1>
+        <p className="text-center text-sm text-smoke">
+          This browser has a saved host key for room {code}.
+        </p>
+        <button
+          type="button"
+          data-testid="resume-as-host"
+          onClick={() => handleResumeAsHost(phase.hostKey)}
+          className="min-h-11 rounded-md bg-brass px-6 py-3 font-semibold text-ink"
+        >
+          Resume as host
+        </button>
+        <button
+          type="button"
+          data-testid="resume-as-host-decline"
+          onClick={() => setPhase({ name: "picking-seat" })}
+          className="min-h-11 text-sm text-smoke underline"
+        >
+          Join as a player instead
+        </button>
+      </main>
+    );
+  }
+
   if (phase.name === "bad-credential" || phase.name === "picking-seat") {
     return (
       <>
@@ -169,6 +248,29 @@ export default function Room({ code }: { code: string }) {
   }
 
   if (phase.name === "connected" && state) {
+    // The host is a pure arbitrator (decision 2026-07-04) — never a player.
+    // Host identity always routes to the dedicated host console screens
+    // (Spec 05), never the player-facing Lobby/GameScreen (Spec 04, which
+    // this spec must not restyle or touch).
+    if (phase.isHost) {
+      return (
+        <>
+          <ConnectionBanner status={status} />
+          {state.game === null ? (
+            <HostLobby
+              state={state}
+              onKick={handleKick}
+              onCopyLink={handleCopyLink}
+              onStartGame={handleStartGame}
+            />
+          ) : state.game.phase === "ended" ? (
+            <HostGameEnd room={state} game={state.game} />
+          ) : (
+            <HostGame room={state} game={state.game} />
+          )}
+        </>
+      );
+    }
     return (
       <>
         <ConnectionBanner status={status} />

@@ -1,5 +1,5 @@
 import type { ClientGameView, Viewer } from "../shared/game-view";
-import { currentRoles, getRole, mafiaKillers } from "./roles";
+import { activeNightActionFor, canSubmitMafiaVote, currentRoles, getRole, mafiaKillers } from "./roles";
 import type { GameEvent, GameState } from "./types";
 
 function revealForPublic(state: GameState, playerId: string) {
@@ -18,6 +18,27 @@ function hiddenVotingFilter(state: GameState, event: GameEvent, god: boolean): b
 function resolvedLog(state: GameState, god: boolean): GameEvent[] {
   const log = god ? state.log : state.log.filter((e) => e.type !== "actionSubmitted");
   return log.filter((e) => hiddenVotingFilter(state, e, god));
+}
+
+// Host-only, night-phase-only per-seat "acted" signal (Spec 02 v2.7). Only
+// seats that OWE an action this phase get a defined value — an individual
+// night-action role (via `activeNightActionFor`, which already excludes
+// dead/absent players and gates mafiaKill on `firstNightKill` night 1) or a
+// living, non-absent mafia-consensus killer (`canSubmitMafiaVote`).
+// Non-actors (villager/minion/bomber-style roles, or a dead/absent seat with
+// no owed action) get `undefined` — never a fabricated `false` — so the host
+// table can render "asleep"/"—" instead of a false "pending".
+function actedThisNight(state: GameState, playerId: string): boolean | undefined {
+  const registry = currentRoles();
+  const spec = activeNightActionFor(state, registry, playerId);
+  if (spec && spec.consensus !== "mafia") {
+    return state.nightActions.some((a) => a.actorId === playerId);
+  }
+  if (canSubmitMafiaVote(state, registry, playerId)) {
+    const vote = state.mafiaVotes.find((v) => v.playerId === playerId);
+    return !!vote && vote.targetId !== null;
+  }
+  return undefined;
 }
 
 function consensusReached(state: GameState): boolean {
@@ -44,7 +65,18 @@ export function projectFor(state: GameState, viewer: Viewer): ClientGameView {
     players: state.players.map((p) => {
       const role = getRole(currentRoles(), p.roleId);
       const visible = god ? { roleId: p.roleId, alignment: role.alignment } : revealForPublic(state, p.id);
-      return { id: p.id, alive: p.alive, absent: p.absent, ...visible };
+      // Host-only, night-phase-only (Spec 02 v2.7) — never computed for
+      // player/public projections, so there is no pending-action leak to
+      // guard against on those paths (the field simply never exists there).
+      const acted =
+        hostLive && state.phase === "night" ? actedThisNight(state, p.id) : undefined;
+      return {
+        id: p.id,
+        alive: p.alive,
+        absent: p.absent,
+        ...visible,
+        ...(acted !== undefined ? { acted } : {}),
+      };
     }),
     log: resolvedLog(state, hostLive),
     winners: state.winners,

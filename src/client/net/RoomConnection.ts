@@ -23,12 +23,13 @@ export interface WelcomeInfo {
   seatToken: string | undefined;
   isHost: boolean;
   state: ClientRoomState;
+  serverNow: number;
 }
 
 export interface RoomConnectionEvents {
   onStatusChange?: (status: ConnectionStatus) => void;
   onWelcome?: (info: WelcomeInfo) => void;
-  onSnapshot?: (state: ClientRoomState) => void;
+  onSnapshot?: (state: ClientRoomState, serverNow: number) => void;
   onKicked?: () => void;
   onError?: (err: ErrorMessage) => void;
   /** A normal in-game command rejection (e.g. `not_your_phase`) — never
@@ -231,10 +232,11 @@ export class RoomConnection {
           seatToken: msg.you.seatToken,
           isHost: msg.you.isHost,
           state: msg.state,
+          serverNow: msg.serverNow,
         });
         return;
       case "snapshot":
-        this.events.onSnapshot?.(msg.state);
+        this.events.onSnapshot?.(msg.state, msg.serverNow);
         return;
       case "kicked":
         this.events.onKicked?.();

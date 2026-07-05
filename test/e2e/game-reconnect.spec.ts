@@ -213,7 +213,7 @@ test("two pages in one browser context are two distinct players inside a running
   await joinAsPlayer(pageD, roomCode, "Dave");
   await joinAsPlayer(pageE, roomCode, "Erin");
 
-  await expect(hostPage.getByTestId("player-row")).toHaveCount(5);
+  await expect(hostPage.getByTestId("host-player-row")).toHaveCount(5);
 
   await startGameWithSeed(hostPage, 42);
 

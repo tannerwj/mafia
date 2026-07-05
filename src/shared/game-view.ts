@@ -33,6 +33,16 @@ export interface ClientGamePlayer {
   absent: boolean;
   roleId?: RoleId;
   alignment?: string;
+  /** Host-only, night/runoff-action-phase-only (Spec 02 v2.7): has this seat
+   * submitted the individual night action or mafia-consensus kill-vote it
+   * owes this phase? Present ONLY for seats that owe an action this phase
+   * (an individual night-action role, or a living non-absent mafia-consensus
+   * participant) — `undefined` for non-actors (villager/minion/bomber-style
+   * roles), never `false` for them, so the UI can render "asleep" instead of
+   * a fabricated "pending". Absent entirely for player/public/dead-god-view
+   * projections — this is a live-pending-action signal, and Spec 02's dead
+   * god view is deliberately resolved-only (no current-phase pending leak). */
+  acted?: boolean;
 }
 
 export interface ClientGameView {

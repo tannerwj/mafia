@@ -1,6 +1,19 @@
 # Spec 02 — Game engine core (pure TS)
 
-**v2.6 — 2026-07-04 · Status: approved for build**
+**v2.7 — 2026-07-04 · Status: approved for build**
+*v2.7 (Spec 05 build fallout): the host projection never populated a
+per-seat night-action-submission signal — the host player table's
+"acted/pending" column (Spec 05 D1) had no data source for the night phase.
+Fix: each game-side player ref gains `acted?: boolean`, populated ONLY for
+`viewer.kind === "host"` during the `night`/`runoff`-action phases, and
+ONLY for seats that owe an action this phase (a role with a night action,
+or a mafia-consensus participant) — absent (undefined) for non-actors
+(villager/minion/bomber) so the UI shows "asleep", not a false "pending",
+and absent entirely for player/public/dead viewers (no leak; dead god view
+stays resolved-only). Per-seat, not a parallel array (avoids id-join
+divergence). `acted = a player has submitted their night action / mafia
+kill-vote`. Day/runoff/dusk "voted" status stays derivable from the
+existing votes projection.*
 *v2.6 (Spec 04 build fallout — two projection-contract gaps found by the UI
 implementer): `you.mafiaRoster?: {id, name?}[] → PlayerId[]` present for
 living MINION viewers (the role's entire ability; "minion sees mafia" was a

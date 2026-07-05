@@ -42,8 +42,10 @@ test("host creates room; two players join and appear in the lobby", async ({
   await joinAsPlayer(p1, roomCode, "Alice");
   await joinAsPlayer(p2, roomCode, "Bob");
 
-  await expect(hostPage.getByTestId("player-list")).toContainText("Alice");
-  await expect(hostPage.getByTestId("player-list")).toContainText("Bob");
+  // The host identity renders the Spec 05 host console (HostLobby), not the
+  // player-facing Lobby.tsx — its player table uses its own testids.
+  await expect(hostPage.getByTestId("host-player-table")).toContainText("Alice");
+  await expect(hostPage.getByTestId("host-player-table")).toContainText("Bob");
 
   await hostCtx.close();
   await p1Ctx.close();
@@ -85,9 +87,9 @@ test("two pages in one browser context are two distinct players", async ({
   await joinAsPlayer(pageA, roomCode, "Dave");
   await joinAsPlayer(pageB, roomCode, "Erin");
 
-  await expect(hostPage.getByTestId("player-list")).toContainText("Dave");
-  await expect(hostPage.getByTestId("player-list")).toContainText("Erin");
-  await expect(hostPage.getByTestId("player-row")).toHaveCount(2);
+  await expect(hostPage.getByTestId("host-player-table")).toContainText("Dave");
+  await expect(hostPage.getByTestId("host-player-table")).toContainText("Erin");
+  await expect(hostPage.getByTestId("host-player-row")).toHaveCount(2);
 
   await hostCtx.close();
   await sharedCtx.close();
@@ -106,13 +108,13 @@ test("kick removes the player everywhere and shows them the join screen", async 
   await joinAsPlayer(playerPage, roomCode, "Frank");
 
   await hostPage
-    .getByTestId("player-row")
+    .getByTestId("host-player-row")
     .filter({ hasText: "Frank" })
     .getByTestId("kick-button")
     .click();
 
   await expect(playerPage.getByTestId("kicked-message")).toBeVisible();
-  await expect(hostPage.getByTestId("player-list")).not.toContainText(
+  await expect(hostPage.getByTestId("host-player-table")).not.toContainText(
     "Frank",
   );
 

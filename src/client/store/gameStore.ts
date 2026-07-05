@@ -53,6 +53,12 @@ interface GameStoreState {
   previousPhase: Phase | "lobby" | null;
   lastError: ErrorMessage | null;
   conn: RoomConnection | null;
+  /** `serverNow - Date.now()` sampled at the moment of the most recent
+   * welcome/snapshot — countdowns add this to `Date.now()` rather than
+   * trusting the local clock (spec pin: "never raw Date.now()"). Re-sampled
+   * on every message, not just once per connection, so a long-lived
+   * connection's drift correction stays fresh. */
+  clockOffsetMs: number;
 
   connect: (code: string, auth: Auth, hooks?: RoomLifecycleHooks) => RoomConnection;
   disconnect: () => void;
@@ -72,6 +78,7 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
   previousPhase: null,
   lastError: null,
   conn: null,
+  clockOffsetMs: 0,
 
   connect: (code, auth, hooks) => {
     get().conn?.close();
@@ -97,13 +104,15 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
           isHost: info.isHost,
           playerId: info.playerId ?? s.playerId,
           previousPhase: info.state.phase,
+          clockOffsetMs: info.serverNow - Date.now(),
         }));
         hooks?.onWelcome?.(info);
       },
-      onSnapshot: (state) => {
+      onSnapshot: (state, serverNow) => {
         set((s) => ({
           room: state,
           previousPhase: s.room?.phase ?? state.phase,
+          clockOffsetMs: serverNow - Date.now(),
         }));
       },
       onRejection: (rejection) => {
@@ -135,6 +144,7 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
       previousPhase: null,
       lastError: null,
       conn: null,
+      clockOffsetMs: 0,
     });
   },
 
@@ -191,4 +201,11 @@ export function startGame(ruleset: unknown, seed?: number): void {
 
 export function newGame(): void {
   useGameStore.getState().send({ type: "new_game" });
+}
+
+/** Drift-corrected "now" — `Date.now()` plus the offset sampled from the
+ * server's own clock at the last welcome/snapshot. Countdown UI must use
+ * this, never raw `Date.now()` (spec pin: skewed phone clocks are common). */
+export function serverNow(): number {
+  return Date.now() + useGameStore.getState().clockOffsetMs;
 }

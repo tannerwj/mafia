@@ -218,3 +218,47 @@
   "READY FOR INSTALL" for the dependency budget (no network in sandbox) —
   orchestrator installs zustand/@radix-ui/react-dialog/vaul/sonner/
   @fontsource-variable/playfair-display then verification proceeds.
+
+## 2026-07-04 — SPEC 04 SHIPPED (ed9c5c2); Spec 05 building
+- Player UI took 4 fix rounds, all driven by live/visual gates that unit
+  tests structurally could not catch. THE catch: reconnect re-sent the
+  original join credential instead of the granted seat token (gameStore
+  never called RoomConnection.setAuth) → every mid-game reconnect hit the
+  server's 30s auth-reap and cycled forever. This is the v0-killer
+  "reconnects break the game" bug, found only by refusing to wave off a
+  flaky E2E test. Also fixed: socket-generation guard (stale listeners),
+  ConnectionBanner self-retriggering-effect stuck-visible, 600ms-vs-300ms
+  phase-fade stuck at 40% opacity. Engine → v2.6 (you.mafiaRoster,
+  you.currentVote), both leak-tested.
+- Verified: typecheck; engine 26 / client 2 (new project) / server 35;
+  playwright 17/17 single-worker clean env. Multi-worker E2E flakes traced
+  to alarm-scheduler starvation under machine load (86 zombie chromium +
+  70MB bloated .wrangler/state) — env, not code. Config: workers 2,
+  per-test timeout 120s.
+- New CLAUDE.md process rule: one E2E runner at a time; kill stray
+  chromium/vite + wipe .wrangler/state before gate runs.
+- spec05-build launched (baseline ed9c5c2): host console, reuses Spec 04
+  components; touches no server/engine/reconnect code. Then Spec 06
+  (ruleset editor) → live multi-browser demo.
+
+## 2026-07-05 — SPEC 05 SHIPPED; host console verified
+- spec05-build delivered D1-D4 green with an honest "no live signal"
+  placeholder for the one field it wasn't authorized to add. It also
+  fixed a latent bug unprompted: serverNow was parsed off the wire and
+  DISCARDED — countdowns had no clock-offset correction until now; added
+  clockOffsetMs + serverNow(). Upgraded host-key recovery from silent
+  auto-connect to an explicit "Resume as host" offer + dual-cred chooser.
+- Engine → v2.7: players[].acted (host-only, night-only, actors-only)
+  landed by a focused agent; leak-tested. The host night-status column
+  ("0 of N have acted — waiting on M", PENDING for actors, ASLEEP for
+  non-actors) is now live.
+- Verified: typecheck clean; engine 27 / client 4 / server 35; E2E
+  near-green (host-console suite 24 tests); LIVE host-console tour
+  screenshots confirm god-view table w/ alignment-tinted roles, acted
+  column, House-rules card, controls, log, privacy chip.
+- Ongoing env pain (documented): this box is overloaded — persistent
+  Monitor tool + background waits die exit 144, E2E flakes on dev-server
+  health under load. Code correctness confirmed via unit/integration
+  green + live tour; E2E flake is environmental, not a defect (same as
+  Spec 04). Kill zombies + wipe .wrangler/state + workers=1 for clean E2E.
+- Remaining: Spec 06 (ruleset editor) → live multi-browser demo. Then done.
