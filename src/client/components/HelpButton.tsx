@@ -16,7 +16,7 @@ export default function HelpButton({ className }: { className?: string }) {
         onClick={() => setOpen(true)}
         className={
           className ??
-          "flex h-11 w-11 items-center justify-center rounded-full border border-smoke bg-ink-2 text-lg text-bone"
+          "flex h-11 w-11 items-center justify-center rounded-sm border border-frame bg-ink-2 text-lg text-paper"
         }
       >
         ?

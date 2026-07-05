@@ -30,13 +30,13 @@ export default function ConfirmDialog({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-ink/90" />
         <Dialog.Content
           data-testid={testId}
-          className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-lg border border-smoke bg-ink-2 p-6 shadow-xl"
+          className="file-frame animate-rise fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-md bg-ink-2 p-6 shadow-card"
         >
           <Dialog.Title asChild>
-            <h2 className="font-display text-xl text-brass">{title}</h2>
+            <h2 className="file-heading text-lg text-brass-hi">{title}</h2>
           </Dialog.Title>
           <Dialog.Description asChild>
-            <p className="mt-2 text-sm text-bone/80">{description}</p>
+            <p className="mt-2 text-sm text-paper/80">{description}</p>
           </Dialog.Description>
           <div className="mt-6 flex justify-end gap-3">
             <Dialog.Close asChild>

@@ -80,31 +80,43 @@ export default function Interstitial({
 }) {
   const isDawn = game.phase === "dawn";
   const lines = announcementsFor(game, playerNames);
-  const heading = isDawn ? "Dawn breaks" : "Night falls";
+  const heading = isDawn ? "Morning bulletin" : "Evening dispatch";
   const fallback = isDawn
-    ? "The village wakes to a quiet night."
-    : "The village settles in for the night.";
+    ? "The town wakes to a quiet night. No incidents on file."
+    : "The town settles in for the night.";
 
   return (
     <div
       data-testid="interstitial"
       data-phase={game.phase}
-      className="flex min-h-[60dvh] flex-col items-center justify-center gap-4 px-6 text-center"
+      className="animate-rise flex min-h-[60dvh] flex-1 flex-col items-center justify-center gap-5 px-6"
     >
-      <p className="text-xs uppercase tracking-[0.3em] text-smoke">
-        Day {game.day}
-      </p>
-      <h1 className="font-display text-4xl text-bone">{heading}</h1>
-      <div data-testid="interstitial-lines" className="flex flex-col gap-2">
-        {lines.length === 0 ? (
-          <p className="text-lg text-bone/80">{fallback}</p>
-        ) : (
-          lines.map((line, i) => (
-            <p key={i} className="text-lg text-bone/80">
-              {line}
+      {/* A typed case bulletin on a torn sheet. The torn top edge is a
+          decorative pseudo-layer (pointer-events:none via .file-torn). */}
+      <div className="file-torn relative w-full max-w-sm rounded-sm border border-frame bg-ink-2 p-6 text-center shadow-card">
+        <p className="text-[0.6rem] uppercase tracking-[0.35em] text-smoke">
+          {isDawn ? "Dawn report" : "Nightfall report"} · File Day {game.day}
+        </p>
+        <h1 className="file-heading mt-2 text-3xl leading-none text-bone">
+          {heading}
+        </h1>
+        <div className="mx-auto my-4 h-px w-16 bg-frame" />
+        <div data-testid="interstitial-lines" className="flex flex-col gap-2">
+          {lines.length === 0 ? (
+            <p className="text-base text-paper/80">
+              <span aria-hidden className="mr-1 select-none text-smoke">
+                //
+              </span>
+              {fallback}
             </p>
-          ))
-        )}
+          ) : (
+            lines.map((line, i) => (
+              <p key={i} className="text-base text-paper/80">
+                {line}
+              </p>
+            ))
+          )}
+        </div>
       </div>
     </div>
   );

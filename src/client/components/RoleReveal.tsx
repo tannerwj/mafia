@@ -25,19 +25,32 @@ export function RoleCard({
 }) {
   const copy = roleCopyFor(roleId);
   return (
-    <div className="flex flex-col items-center gap-2 text-center">
-      <p className="text-xs uppercase tracking-[0.3em] text-smoke">
-        Your role
+    <div className="flex flex-col items-center gap-3 text-center">
+      {/* Paperclip riding the top edge of the classified assignment. */}
+      <span aria-hidden className="-mt-2 text-2xl leading-none text-smoke">
+        🖇
+      </span>
+      <p className="text-[0.65rem] uppercase tracking-[0.35em] text-smoke">
+        Classified assignment
       </p>
-      <h2 className="font-display text-4xl text-brass">{copy.displayName}</h2>
-      {copy.blurb && <p className="max-w-xs text-sm text-bone/80">{copy.blurb}</p>}
+      <h2 className="file-heading text-4xl leading-none text-brass-hi">
+        {copy.displayName}
+      </h2>
+      {copy.blurb && (
+        <p className="max-w-xs text-sm text-paper/80">
+          <span aria-hidden className="mr-1 select-none text-smoke">
+            //
+          </span>
+          {copy.blurb}
+        </p>
+      )}
       {mafiaRoster && (
         <div data-testid="role-card-mafia-roster" className="mt-2 w-full text-left text-sm">
-          <p className="mb-1 text-xs uppercase tracking-widest text-smoke">
-            {roleId === "minion" ? "The Mafia" : "Your partners"}
+          <p className="mb-1 text-[0.65rem] uppercase tracking-[0.15em] text-smoke">
+            {roleId === "minion" ? "The Syndicate" : "Your associates"}
           </p>
           {mafiaRoster.length === 0 ? (
-            <p className="text-bone/80">No one else is Mafia.</p>
+            <p className="text-paper/80">No known associates.</p>
           ) : (
             <ul className="flex flex-col gap-1">
               {mafiaRoster.map((id) => (
@@ -82,7 +95,7 @@ export default function RoleReveal({ roleId }: { roleId: string }) {
           <Dialog.Overlay className="fixed inset-0 z-40 bg-ink/90" />
           <Dialog.Content
             data-testid="role-reveal-dialog"
-            className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-xs -translate-x-1/2 -translate-y-1/2 rounded-lg border border-smoke bg-ink-2 p-8 shadow-xl"
+            className="file-frame animate-rise fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-xs -translate-x-1/2 -translate-y-1/2 rounded-md bg-ink-2 p-8 shadow-card"
           >
             <Dialog.Title asChild>
               <span className="sr-only">Your role has been assigned</span>

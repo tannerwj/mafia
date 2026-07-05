@@ -22,8 +22,13 @@ export default function SeatPicker({
   }
 
   return (
-    <main className="safe-top safe-bottom safe-x mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-8 bg-ink p-6 text-bone">
-      <h1 className="font-display text-4xl text-blood">Join the game</h1>
+    <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-8 bg-ink p-6 text-paper">
+      <div className="animate-rise flex flex-col items-center gap-2 text-center">
+        <p className="text-[0.65rem] uppercase tracking-[0.3em] text-smoke">
+          Report for questioning
+        </p>
+        <h1 className="file-heading text-3xl text-blood">Sign the register</h1>
+      </div>
 
       {backups.length > 0 && !showJoinNew && (
         <div className="flex w-full max-w-xs flex-col gap-3">
@@ -33,7 +38,7 @@ export default function SeatPicker({
               type="button"
               data-testid="rejoin-backup"
               onClick={() => onPickBackup(entry)}
-              className="min-h-11 rounded-md border border-smoke bg-ink-2 px-4 py-3 text-left text-bone hover:border-brass"
+              className="min-h-11 rounded-sm border border-frame bg-ink-2 px-4 py-3 text-left text-paper transition-colors hover:border-brass"
             >
               Rejoin as {entry.name}
             </button>
@@ -42,9 +47,9 @@ export default function SeatPicker({
             type="button"
             data-testid="join-as-new"
             onClick={() => setShowJoinNew(true)}
-            className="min-h-11 rounded-md border border-dashed border-smoke px-4 py-3 text-smoke"
+            className="file-frame min-h-11 rounded-sm px-4 py-3 text-smoke transition-colors hover:border-brass"
           >
-            Join as someone new
+            Enter a new subject
           </button>
         </div>
       )}
@@ -59,11 +64,11 @@ export default function SeatPicker({
             value={name}
             onChange={(e) => setName(e.target.value)}
             maxLength={20}
-            placeholder="Your name"
+            placeholder="Subject name"
             autoFocus
-            className="h-12 rounded-md border border-smoke bg-ink-2 px-3 text-bone placeholder:text-smoke focus:border-brass focus:outline-none"
+            className="h-12 rounded-md border border-frame bg-ink-2 px-3 text-paper placeholder:text-smoke/60 focus:border-brass focus:outline-none"
           />
-          <Button type="submit" data-testid="join-name-submit" className="w-full">
+          <Button type="submit" variant="brass" data-testid="join-name-submit" className="w-full">
             Join
           </Button>
           {backups.length > 0 && (
@@ -72,7 +77,7 @@ export default function SeatPicker({
               onClick={() => setShowJoinNew(false)}
               className="min-h-11 text-sm text-smoke"
             >
-              Back to saved seats
+              Back to filed subjects
             </button>
           )}
         </form>

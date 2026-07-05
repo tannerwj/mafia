@@ -10,8 +10,8 @@ import { HOUSE_ROLE_IDS, roleCopyFor } from "../lib/roleCopy";
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-2">
-      <h3 className="font-display text-lg text-brass">{title}</h3>
-      <div className="flex flex-col gap-2 text-sm text-bone/80">{children}</div>
+      <h3 className="file-heading text-sm tracking-[0.08em] text-brass-hi">{title}</h3>
+      <div className="flex flex-col gap-2 text-sm text-paper/80">{children}</div>
     </section>
   );
 }
@@ -66,7 +66,9 @@ export function InstructionsContent() {
             const copy = roleCopyFor(roleId);
             return (
               <li key={roleId} data-testid="instructions-role" data-role-id={roleId}>
-                <p className="font-medium text-bone">{copy.displayName}</p>
+                <p className="font-bold uppercase tracking-[0.06em] text-bone">
+                  {copy.displayName}
+                </p>
                 <p>{copy.instructionsBlurb ?? copy.blurb}</p>
               </li>
             );
@@ -90,18 +92,18 @@ export default function InstructionsModal({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-ink/90" />
         <Dialog.Content
           data-testid="instructions-modal"
-          className="fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-smoke bg-ink-2 p-6 shadow-xl"
+          className="file-frame animate-rise fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col rounded-md bg-ink-2 p-6 shadow-card"
         >
           <div className="mb-4 flex items-center justify-between">
             <Dialog.Title asChild>
-              <h2 className="font-display text-2xl text-blood">How to play</h2>
+              <h2 className="file-heading text-xl text-blood">Case briefing</h2>
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
                 type="button"
                 data-testid="instructions-close"
                 aria-label="Close instructions"
-                className="flex h-11 w-11 items-center justify-center rounded-full border border-smoke text-bone"
+                className="flex h-11 w-11 items-center justify-center rounded-sm border border-frame text-paper"
               >
                 ✕
               </button>

@@ -7,6 +7,7 @@ import { useState } from "react";
 import type { ClientGameView } from "../../../shared/game-view";
 import type { ClientRoomState } from "../../../shared/protocol";
 import { Button } from "../../components/ui/button";
+import { Card } from "../../components/ui/card";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import HelpButton from "../../components/HelpButton";
 import { forceAdvance, markAbsent, markPresent } from "../../store/gameStore";
@@ -18,17 +19,20 @@ import HostLog from "./HostLog";
 
 function PhaseHeader({ game, rows }: { game: ClientGameView; rows: ReturnType<typeof hostSeatRows> }) {
   return (
-    <div className="flex flex-col gap-1 rounded-md border border-smoke/60 bg-ink-2 px-4 py-3">
+    <Card className="gap-1 px-4 py-3">
       <div className="flex items-center justify-between">
-        <p className="font-display text-2xl text-bone" data-testid="host-phase-label">
+        <p className="file-heading text-xl text-bone" data-testid="host-phase-label">
           {phaseLabel(game.phase)} — Day {game.day}
         </p>
         <DeadlineCountdown deadlineAt={game.deadlineAt} />
       </div>
       <p className="text-sm text-smoke" data-testid="host-phase-summary">
+        <span aria-hidden className="mr-1 select-none">
+          //
+        </span>
         {phaseSummary(game, rows)}
       </p>
-    </div>
+    </Card>
   );
 }
 
@@ -74,11 +78,11 @@ function ForceAdvanceControl({ game }: { game: ClientGameView }) {
 function Controls({ game }: { game: ClientGameView }) {
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-xs uppercase tracking-widest text-smoke">Controls</p>
+      <p className="text-[0.65rem] uppercase tracking-[0.2em] text-smoke">Investigator controls</p>
       <ForceAdvanceControl game={game} />
       <p className="text-xs text-smoke">
-        Mark players absent/present from their row in the table — absent players are
-        removed from every consensus/vote denominator immediately.
+        // Mark subjects absent/present from their row — absent subjects leave
+        every consensus/vote denominator immediately.
       </p>
     </div>
   );
@@ -90,9 +94,14 @@ export default function HostGame({ room, game }: { room: ClientRoomState; game: 
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   return (
-    <main className="safe-top safe-bottom safe-x mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-4 bg-ink p-4 text-bone">
+    <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-4 bg-ink p-4 text-paper">
       <div className="flex items-center justify-between gap-2">
-        <h1 className="font-display text-2xl text-blood">Host console</h1>
+        <div className="flex flex-col">
+          <p className="text-[0.6rem] uppercase tracking-[0.3em] text-smoke">
+            Lead investigator
+          </p>
+          <h1 className="file-heading text-xl text-blood">The Case Board</h1>
+        </div>
         <div className="flex items-center gap-2">
           <HelpButton />
           <PrivacyChip />
@@ -103,7 +112,7 @@ export default function HostGame({ room, game }: { room: ClientRoomState; game: 
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 md:grid-cols-2">
         <div className="flex min-h-0 flex-col gap-2">
-          <p className="text-xs uppercase tracking-widest text-smoke">Players</p>
+          <p className="text-[0.65rem] uppercase tracking-[0.2em] text-smoke">Subject dossiers</p>
           <PlayerTable
             rows={rows}
             inGame
@@ -138,11 +147,11 @@ export default function HostGame({ room, game }: { room: ClientRoomState; game: 
             <Drawer.Overlay className="fixed inset-0 z-40 bg-ink/80" />
             <Drawer.Content
               data-testid="controls-drawer"
-              className="fixed bottom-0 left-0 right-0 z-50 mx-auto flex max-h-[85dvh] w-full max-w-md flex-col rounded-t-2xl border-t border-smoke bg-ink-2 p-6"
+              className="fixed bottom-0 left-0 right-0 z-50 mx-auto flex max-h-[85dvh] w-full max-w-md flex-col rounded-t-lg border-t-2 border-frame bg-ink-2 p-6 shadow-card"
             >
-              <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-smoke" />
+              <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-frame" />
               <Drawer.Title asChild>
-                <h2 className="font-display text-2xl text-bone">Controls</h2>
+                <h2 className="file-heading text-xl text-bone">Investigator controls</h2>
               </Drawer.Title>
               <Drawer.Description asChild>
                 <span className="sr-only">Host controls for the current phase.</span>

@@ -1,15 +1,16 @@
-// Minimal `cn()` — joins truthy class-name fragments with a single space.
-//
-// The shadcn `Button` pattern normally pairs `clsx` + `tailwind-merge` for
-// this, but neither is in this spec's closed dependency budget (D1: exactly
-// zustand, @radix-ui/react-dialog, vaul, sonner,
-// @fontsource-variable/playfair-display — nothing else without a documented
-// justification). This app's class lists are short and hand-written (no
-// conflicting Tailwind utility pairs generated dynamically), so a bare
-// filter+join covers every call site here without needing tailwind-merge's
-// conflict resolution. See docs/specs/04-implementation-notes.md.
-export type ClassValue = string | false | null | undefined;
+// `cn()` — the standard shadcn class-name combiner: `clsx` for conditional
+// joining + `tailwind-merge` for last-wins conflict resolution (so a caller's
+// `className` override of a variant's utility actually wins instead of both
+// classes landing in the list). Spec 09 D1 opens the closed dependency budget
+// to exactly this trio (clsx + tailwind-merge, plus class-variance-authority
+// for the Button/Badge variant maps) — the pre-09 hand-rolled filter+join
+// couldn't resolve conflicting Tailwind utilities, which the shared shadcn
+// primitives now generate.
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
 
-export function cn(...values: ClassValue[]): string {
-  return values.filter(Boolean).join(" ");
+export type { ClassValue };
+
+export function cn(...inputs: ClassValue[]): string {
+  return twMerge(clsx(inputs));
 }

@@ -88,9 +88,13 @@ export default function GameScreen({
     <main
       data-testid="game-screen"
       data-phase={game.phase}
-      className="phase-tint safe-top safe-bottom safe-x mx-auto flex min-h-dvh w-full max-w-md flex-col text-bone"
+      className="phase-tint safe-top safe-bottom safe-x relative mx-auto flex min-h-dvh w-full max-w-md flex-col text-bone"
       data-tint={fading ? "fading" : tint}
     >
+      {/* Decorative phase wash (Spec 09 D1) — CSS keyed off this <main>'s
+          existing data-phase. Absolute, pointer-events:none, z-0, so it sits
+          behind interactive content and never delays newer state. */}
+      <div className="phase-ambiance" aria-hidden="true" />
       {you && <RoleReveal roleId={you.roleId ?? ""} />}
       {you?.roleId && (
         <MyRoleButton
@@ -99,22 +103,25 @@ export default function GameScreen({
           playerNames={new Map(players.map((p) => [p.id, p.name]))}
         />
       )}
-      <HelpButton className="fixed bottom-3 right-3 z-60 flex h-11 w-11 items-center justify-center rounded-full border-2 border-smoke bg-ink-2 text-lg text-bone shadow-lg safe-bottom safe-x" />
+      <HelpButton className="fixed bottom-3 right-3 z-60 flex h-11 w-11 items-center justify-center rounded-sm border-2 border-frame bg-ink-2 text-lg text-paper shadow-lg safe-bottom safe-x" />
 
-      {game.phase === "ended" ? (
-        <GameEnd game={game} players={players} isHost={isHost} />
-      ) : isDead ? (
-        <DeadGodView game={game} players={players} />
-      ) : game.phase === "dawn" || game.phase === "dusk" ? (
-        <Interstitial
-          game={game}
-          playerNames={new Map(players.map((p) => [p.id, p.name]))}
-        />
-      ) : game.phase === "night" ? (
-        <NightActionDrawer game={game} players={players} />
-      ) : (
-        <DayVoting game={game} players={players} />
-      )}
+      {/* Content stacks above the decorative z-0 ambiance wash. */}
+      <div className="relative z-10 flex flex-1 flex-col">
+        {game.phase === "ended" ? (
+          <GameEnd game={game} players={players} isHost={isHost} />
+        ) : isDead ? (
+          <DeadGodView game={game} players={players} />
+        ) : game.phase === "dawn" || game.phase === "dusk" ? (
+          <Interstitial
+            game={game}
+            playerNames={new Map(players.map((p) => [p.id, p.name]))}
+          />
+        ) : game.phase === "night" ? (
+          <NightActionDrawer game={game} players={players} />
+        ) : (
+          <DayVoting game={game} players={players} />
+        )}
+      </div>
     </main>
   );
 }

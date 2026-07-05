@@ -13,6 +13,7 @@ import {
   setSessionSeat,
 } from "../net/identity";
 import { HOUSE_RULESET, testRolesOverride, testSeedOverride } from "../lib/houseRuleset";
+import { Button } from "../components/ui/button";
 import type { Auth } from "../net/RoomConnection";
 import { useGameStore } from "../store/gameStore";
 import { navigate } from "../useRoute";
@@ -188,17 +189,14 @@ export default function Room({ code }: { code: string }) {
 
   if (phase.name === "kicked") {
     return (
-      <main className="safe-top safe-bottom safe-x mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-4 bg-ink p-6 text-bone">
-        <p data-testid="kicked-message" className="text-lg">
-          You were removed from this room.
+      <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-5 bg-ink p-6 text-paper">
+        <span className="stamp stamp-red text-sm">Case closed</span>
+        <p data-testid="kicked-message" className="text-center text-lg">
+          You were removed from this case file.
         </p>
-        <button
-          type="button"
-          onClick={() => navigate("/")}
-          className="min-h-11 rounded-md bg-blood px-4 py-2 text-bone"
-        >
-          Back home
-        </button>
+        <Button type="button" variant="brass" onClick={() => navigate("/")}>
+          Back to the office
+        </Button>
       </main>
     );
   }
@@ -216,26 +214,30 @@ export default function Room({ code }: { code: string }) {
 
   if (phase.name === "offering-host-recovery") {
     return (
-      <main className="safe-top safe-bottom safe-x mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-6 bg-ink p-6 text-bone">
-        <h1 className="font-display text-2xl text-blood">Resume hosting?</h1>
-        <p className="text-center text-sm text-smoke">
-          This browser has a saved host key for room {code}.
+      <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-6 bg-ink p-6 text-paper">
+        <p className="text-[0.65rem] uppercase tracking-[0.3em] text-smoke">
+          Credentials on file
         </p>
-        <button
+        <h1 className="file-heading text-2xl text-blood">Resume the case?</h1>
+        <p className="text-center text-sm text-smoke">
+          This device holds the lead investigator's key for file {code}.
+        </p>
+        <Button
           type="button"
           data-testid="resume-as-host"
+          variant="brass"
+          size="lg"
           onClick={() => handleResumeAsHost(phase.hostKey)}
-          className="min-h-11 rounded-md bg-brass px-6 py-3 font-semibold text-ink"
         >
-          Resume as host
-        </button>
+          Resume as investigator
+        </Button>
         <button
           type="button"
           data-testid="resume-as-host-decline"
           onClick={() => setPhase({ name: "picking-seat" })}
           className="min-h-11 text-sm text-smoke underline"
         >
-          Join as a player instead
+          Join as a subject instead
         </button>
       </main>
     );
@@ -252,6 +254,9 @@ export default function Room({ code }: { code: string }) {
         />
         {lastError && (
           <p data-testid="room-error" className="p-2 text-center text-sm text-blood">
+            <span aria-hidden className="mr-1 select-none">
+              //
+            </span>
             {lastError.message}
           </p>
         )}
@@ -308,8 +313,10 @@ export default function Room({ code }: { code: string }) {
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-ink text-bone">
-      <p>Connecting…</p>
+    <main className="relative z-10 flex min-h-dvh items-center justify-center bg-ink text-paper">
+      <p className="text-xs uppercase tracking-[0.2em] text-smoke">
+        // Opening the file…
+      </p>
     </main>
   );
 }
@@ -323,15 +330,17 @@ function ManualShareLink({ url, onDismiss }: { url: string | null; onDismiss: ()
   return (
     <div
       data-testid="manual-share-link"
-      className="safe-x fixed inset-x-0 bottom-0 z-50 flex flex-col gap-2 border-t border-brass/60 bg-ink-2 p-4 text-bone shadow-lg"
+      className="safe-x fixed inset-x-0 bottom-0 z-50 flex flex-col gap-2 border-t border-brass/60 bg-ink-2 p-4 text-paper shadow-lg"
     >
-      <p className="text-sm text-bone/80">Copy this link and send it to your friends:</p>
+      <p className="text-sm text-paper/80">
+        // Copy this reference and send it to your subjects:
+      </p>
       <input
         data-testid="manual-share-url"
         readOnly
         value={url}
         onFocus={(e) => e.currentTarget.select()}
-        className="w-full select-all rounded-md border border-smoke bg-ink px-3 py-2 text-sm text-brass"
+        className="w-full select-all rounded-md border border-frame bg-ink px-3 py-2 text-sm text-brass-hi"
       />
       <button
         type="button"

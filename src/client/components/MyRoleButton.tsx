@@ -8,6 +8,7 @@
 // content is: mount-then-dismiss, never a permanently-mounted role badge.
 import * as Dialog from "@radix-ui/react-dialog";
 import { useState } from "react";
+import { Button } from "./ui/button";
 import { RoleCard } from "./RoleReveal";
 
 export default function MyRoleButton({
@@ -28,10 +29,10 @@ export default function MyRoleButton({
         data-testid="my-role-button"
         aria-label="My role"
         onClick={() => setOpen(true)}
-        className="fixed bottom-3 left-3 z-60 flex h-11 min-w-11 items-center gap-2 rounded-full border-2 border-smoke bg-ink-2 px-4 text-sm font-medium text-bone shadow-lg safe-bottom safe-x active:border-brass"
+        className="fixed bottom-3 left-3 z-60 flex h-11 min-w-11 items-center gap-2 rounded-sm border-2 border-frame bg-ink-2 px-4 text-xs font-bold uppercase tracking-[0.1em] text-paper shadow-lg safe-bottom safe-x active:border-brass"
       >
-        <span aria-hidden="true">🎭</span>
-        My Role
+        <span aria-hidden="true">🗂</span>
+        My File
       </button>
 
       <Dialog.Root open={open} onOpenChange={setOpen}>
@@ -39,7 +40,7 @@ export default function MyRoleButton({
           <Dialog.Overlay className="fixed inset-0 z-40 bg-ink/90" />
           <Dialog.Content
             data-testid="my-role-dialog"
-            className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-xs -translate-x-1/2 -translate-y-1/2 rounded-lg border border-smoke bg-ink-2 p-8 shadow-xl"
+            className="file-frame animate-rise fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-xs -translate-x-1/2 -translate-y-1/2 rounded-md bg-ink-2 p-8 shadow-card"
           >
             <Dialog.Title asChild>
               <span className="sr-only">Your role</span>
@@ -49,13 +50,14 @@ export default function MyRoleButton({
             </Dialog.Description>
             <RoleCard roleId={roleId} mafiaRoster={mafiaRoster} playerNames={playerNames} />
             <Dialog.Close asChild>
-              <button
+              <Button
                 type="button"
                 data-testid="my-role-dialog-close"
-                className="mt-6 min-h-11 w-full rounded-md border border-smoke text-bone"
+                variant="outline"
+                className="mt-6 w-full"
               >
                 Close
-              </button>
+              </Button>
             </Dialog.Close>
           </Dialog.Content>
         </Dialog.Portal>

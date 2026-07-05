@@ -5,10 +5,10 @@ export default function PrivacyChip() {
   return (
     <span
       data-testid="privacy-chip"
-      className="inline-flex items-center gap-1.5 rounded-full border border-smoke/60 bg-ink-3 px-3 py-1 text-xs text-smoke"
+      className="inline-flex items-center gap-1.5 rounded-sm border border-frame bg-ink-3 px-3 py-1 text-[0.65rem] uppercase tracking-[0.08em] text-smoke"
     >
-      <span aria-hidden>🎭</span>
-      arbitrator screen — keep it private
+      <span aria-hidden>🔒</span>
+      eyes only — keep this file private
     </span>
   );
 }

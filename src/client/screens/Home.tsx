@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button } from "../components/ui/button";
+import { Separator } from "../components/ui/separator";
 import { navigate } from "../useRoute";
 
 export default function Home() {
@@ -41,34 +42,44 @@ export default function Home() {
   }
 
   return (
-    <main className="safe-top safe-bottom safe-x mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-10 bg-ink p-6 text-bone">
-      <div className="flex flex-col items-center gap-2">
-        <h1 className="font-display text-5xl text-blood">Mafia</h1>
-        <p className="text-sm text-smoke">a silent game for a loud table</p>
+    <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-9 bg-ink p-6 text-paper">
+      <div className="animate-rise flex flex-col items-center gap-3">
+        <p className="text-[0.7rem] uppercase tracking-[0.4em] text-smoke">
+          Case File No. 187
+        </p>
+        <h1 className="file-heading text-7xl leading-none text-blood">MAFIA</h1>
+        <span className="stamp stamp-red text-[0.6rem]">Confidential</span>
+        <p className="mt-1 text-xs uppercase tracking-[0.2em] text-smoke">
+          a silent game for a loud table
+        </p>
       </div>
 
       <Button
         onClick={createRoom}
         disabled={creating}
         data-testid="create-room"
+        variant="brass"
         size="lg"
         className="w-full max-w-xs"
       >
-        {creating ? "Creating…" : "Create room"}
+        {creating ? "Opening file…" : "Open a new case"}
       </Button>
 
       <div className="flex w-full max-w-xs items-center gap-3 text-smoke">
-        <div className="h-px flex-1 bg-smoke/40" />
-        <span className="text-xs uppercase tracking-widest">or</span>
-        <div className="h-px flex-1 bg-smoke/40" />
+        <Separator className="flex-1" />
+        <span className="text-[0.65rem] uppercase tracking-[0.3em]">or</span>
+        <Separator className="flex-1" />
       </div>
 
       <form
         onSubmit={joinRoom}
         className="flex w-full max-w-xs flex-col items-center gap-3"
       >
-        <label htmlFor="join-code" className="text-sm text-smoke">
-          Have a room code?
+        <label
+          htmlFor="join-code"
+          className="text-xs uppercase tracking-[0.2em] text-smoke"
+        >
+          File reference number
         </label>
         <input
           id="join-code"
@@ -77,7 +88,7 @@ export default function Home() {
           onChange={(e) => setJoinCode(e.target.value)}
           maxLength={5}
           placeholder="ABCDE"
-          className="h-12 w-full rounded-md border border-smoke bg-ink-2 px-3 text-center text-xl uppercase tracking-widest text-bone placeholder:text-smoke focus:border-brass focus:outline-none"
+          className="h-12 w-full rounded-md border border-frame bg-ink-2 px-3 text-center text-xl uppercase tracking-[0.3em] text-brass-hi placeholder:text-smoke/60 focus:border-brass focus:outline-none"
         />
         <Button
           type="submit"
@@ -85,7 +96,7 @@ export default function Home() {
           variant="outline"
           className="w-full"
         >
-          Go to room
+          Pull the file
         </Button>
       </form>
 

@@ -1,27 +1,66 @@
 @import "tailwindcss";
 
-/* Self-hosted variable Playfair Display (woff2, bundled by Vite) — no
-   external font / CDN requests anywhere, per D1. Only the weight axis range
-   this app actually uses (display headings) is imported to keep the bundle
-   small. */
-@import "@fontsource-variable/playfair-display";
-
 /* ---------------------------------------------------------------------------
- * Noir theme tokens (D1). Dark always — there is no light mode, this app is
- * used in dim party rooms. Every color the UI uses funnels through these.
+ * Spec 10 — "Case File" identity. A 1940s detective's dossier: aged manila
+ * paper text on a near-black desk, a monospace typewriter voice everywhere,
+ * rubber stamps, redaction bars, and dashed file frames. Dark always — this
+ * app is used in dim party rooms. Every color the UI uses funnels through
+ * these semantic tokens.
+ *
+ * NO external font: the primary voice is the system monospace stack (no
+ * webfont URL / CDN, per the hard constraint). Playfair is retired — the one
+ * "display" moment (big dramatic headlines) is the same mono stack pushed to
+ * heavy weight + tight tracking, so there is nothing left to download.
  * --------------------------------------------------------------------------- */
 @theme {
-  --color-ink: #0c0a09;
-  --color-ink-2: #1c1917;
-  --color-ink-3: #292524;
-  --color-blood: #991b1b;
-  --color-brass: #ca8a04;
-  --color-bone: #e7e5e4;
-  --color-smoke: #44403c;
+  /* Ink grounds — the desk the file sits on. */
+  --color-ink: #0d0c0a; /* near-black desk */
+  --color-ink-2: #15130f; /* file-shadow surface */
+  --color-ink-3: #1c1a15; /* raised paper-on-desk surface */
 
-  --font-display: "Playfair Display Variable", ui-serif, Georgia, serif;
+  /* Paper — aged manila/kraft. The primary "typed on paper" text + surfaces.
+   * `bone` is the emphasis paper (a shade lighter). The token names `bone`
+   * and `smoke` are KEPT (rather than renamed to paper/faded) so every
+   * existing `text-bone`/`text-smoke`/`bg-ink-2` call site across ~25 files
+   * re-skins in place with zero churn — only their VALUES change to the Case
+   * File palette. */
+  --color-paper: #d8c69a; /* manila body text/surface */
+  --color-bone: #e7dcc0; /* lighter emphasis paper */
+  --color-smoke: #9a8f76; /* faded secondary / "// comment" metadata */
+
+  /* Rubber-stamp red — danger / alert / mafia / DECEASED / selected-kill
+   * ONLY. It is stamp ink, never a general accent. `blood` name kept for the
+   * same zero-churn reason as `bone`/`smoke`. */
+  --color-blood: #a01e1e;
+
+  /* Evidence-tab accent — a muted olive for file tabs and the "selected /
+   * marked" affordance. Replaces the old `brass` gold as the primary
+   * interactive-accent (name kept; value changed) so selected states, focus
+   * rings, and tab labels read as case-file olive, not saloon brass. */
+  --color-brass: #8a7d4e;
+  /* A brighter olive for text that must pop on dark (selected labels). */
+  --color-brass-hi: #b7a86a;
+
+  /* Worn file-frame border. */
+  --color-frame: #3d382c;
+
+  /* Monospace typewriter is the primary + default voice everywhere. */
   --font-sans:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  /* The one "display" face for dramatic headline moments — the SAME system
+   * mono stack (no download); drama comes from weight + tracking in the
+   * `.stamp-heading` / large type utilities, not a separate typeface. */
+  --font-display:
+    ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+
+  --radius-lg: 0.25rem; /* files have crisp, near-square corners, not pills */
+  --radius-md: 0.1875rem;
+
+  /* The single card-lift shadow — a paper sheet dropped on the desk. Low,
+   * dark, slightly offset so cards read as physical pages. */
+  --shadow-card: 0 6px 18px -10px rgb(0 0 0 / 0.8);
 }
 
 :root {
@@ -31,7 +70,7 @@
 html,
 body {
   background-color: var(--color-ink);
-  color: var(--color-bone);
+  color: var(--color-paper);
   overscroll-behavior-y: none;
 }
 
@@ -46,18 +85,15 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
- * Phase tinting (D1). Night screens stay cool/pure ink; day screens go warm
- * (ink-2 surface + brass emphasis). The transition itself is an interruptible
- * 300ms fade through black — implemented as a plain opacity/background
- * transition on the phase-tint wrapper, driven by a data attribute so the
- * "previous phase" bookkeeping (needed only to know a transition is in
- * flight) can live in the UI-only zustand slot, not here.
+ * Phase tinting (D1, Spec 04 contract preserved). Night screens stay on the
+ * deepest ink; day screens warm slightly toward the raised paper surface. The
+ * transition is an interruptible 300ms fade through black — driven by a data
+ * attribute so the "previous phase" bookkeeping stays in the UI-only zustand
+ * slot, not here. FADE_MS in GameScreen.tsx stays in lockstep with the 150ms
+ * legs below.
  * --------------------------------------------------------------------------- */
 .phase-tint {
   background-color: var(--color-ink);
-  /* Each leg (fade out, then fade in once the tint bucket swaps) is half
-   * the spec's pinned 300ms total transition budget — see FADE_MS in
-   * GameScreen.tsx for why this must stay in lockstep with that constant. */
   transition:
     background-color 150ms ease,
     opacity 150ms ease;
@@ -71,25 +107,241 @@ body {
   opacity: 0;
 }
 
-/* Safe-area padding utilities (notches / home indicators). Tailwind v4 has
- * no built-in env() utility, so these are hand-rolled the same way the rest
- * of D1's tokens are. */
+/* ---------------------------------------------------------------------------
+ * Atmosphere. Every layer here is DECORATIVE and therefore
+ * `pointer-events: none` and behind interactive content in z-order — the
+ * pinned hard constraint (a decorative overlay that eats taps re-breaks the
+ * app). Interactive controls keep the default `pointer-events: auto` and sit
+ * above these layers.
+ * --------------------------------------------------------------------------- */
+
+/* Global paper texture. Fixed, full-viewport, mounted once at app root (see
+ * App.tsx <GrainOverlay/>). A warm paper-fiber cast: an inline-SVG
+ * `feTurbulence` fiber noise `data:` URI (NO hosted image, NO external
+ * request) tinted warm via a soft-light blend so it reads as manila grain
+ * over the ink, plus a faint warm vignette. Low opacity — texture, not a
+ * pattern. */
+.grain-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.06;
+  mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* A second, static warm cast so even against pure ink the ground reads as an
+ * aged desk, not a flat black screen. */
+.grain-overlay::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgb(138 125 78 / 0.06), transparent 55%),
+    radial-gradient(140% 120% at 50% 120%, rgb(0 0 0 / 0.4), transparent 60%);
+}
+
+/* Phase ambiance — a decorative full-viewport wash keyed off the SAME
+ * `data-phase` attribute Spec 04 puts on the game screen. Pure CSS, adds NO
+ * JS state and never gates/delays newer state. Night: a cold desk-lamp
+ * vignette. Day: a faint warm interrogation-lamp glow. Dawn/dusk: a dramatic
+ * radial wash behind the bulletin. */
+.phase-ambiance {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  transition: opacity 300ms ease;
+}
+
+[data-phase="night"] .phase-ambiance {
+  background:
+    radial-gradient(120% 80% at 50% -10%, rgb(154 143 118 / 0.14), transparent 60%),
+    linear-gradient(to bottom, rgb(13 12 10 / 0), rgb(13 12 10 / 0.6));
+}
+
+[data-phase="day"] .phase-ambiance,
+[data-phase="runoff"] .phase-ambiance {
+  background: radial-gradient(
+    100% 70% at 50% 0%,
+    rgb(138 125 78 / 0.12),
+    transparent 55%
+  );
+}
+
+[data-phase="dawn"] .phase-ambiance {
+  background: radial-gradient(
+    90% 60% at 50% 40%,
+    rgb(138 125 78 / 0.16),
+    rgb(13 12 10 / 0) 60%
+  );
+}
+
+[data-phase="dusk"] .phase-ambiance {
+  background: radial-gradient(
+    90% 60% at 50% 40%,
+    rgb(160 30 30 / 0.16),
+    rgb(13 12 10 / 0) 60%
+  );
+}
+
+[data-phase="ended"] .phase-ambiance {
+  background: radial-gradient(
+    100% 70% at 50% 30%,
+    rgb(160 30 30 / 0.12),
+    transparent 60%
+  );
+}
+
+/* ---------------------------------------------------------------------------
+ * Case File motif utilities (D1). These carry the identity; the reusable
+ * <Stamp>/<Redaction>/<FileCard>/<FieldRow> React primitives compose them.
+ * --------------------------------------------------------------------------- */
+
+/* Rubber stamp — a rotated, bordered, roughly-inked mark. Decorative when
+ * used as an overlay (callers add `pointer-events-none`); as an inline badge
+ * it carries no interaction. */
+.stamp {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2.5px solid currentColor;
+  border-radius: 2px;
+  padding: 0.15em 0.5em;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  line-height: 1;
+  transform: rotate(-6deg);
+  /* Rough, faded rubber-ink look: slightly translucent + a soft double edge. */
+  opacity: 0.85;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+.stamp-red {
+  color: var(--color-blood);
+}
+.stamp-olive {
+  color: var(--color-brass-hi);
+}
+.stamp-faded {
+  color: var(--color-smoke);
+}
+
+/* The one heavy "display" heading treatment — a struck typewriter headline.
+ * Heavy weight + tight tracking on the mono stack; no serif, no download. */
+.file-heading {
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  text-transform: uppercase;
+}
+
+/* Redaction bar — a solid black marker strike over hidden information. The
+ * text underneath is NOT in the DOM (callers render redaction in place of the
+ * secret, never over real text), so this is honest, not just visual. */
+.redaction {
+  display: inline-block;
+  background: #05040300;
+  background-color: var(--color-ink);
+  color: transparent;
+  border-radius: 1px;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.9);
+  /* The marker ink itself: near-black with a faint uneven sheen. */
+  background-image: linear-gradient(
+    92deg,
+    #0a0908 0%,
+    #050403 40%,
+    #0a0908 100%
+  );
+  user-select: none;
+}
+
+/* Dashed file-frame border for dossier cards/sections. */
+.file-frame {
+  border: 1.5px dashed var(--color-frame);
+}
+
+/* Torn/perforated top edge for a report sheet (interstitials). A decorative
+ * masked strip riding the top border — `pointer-events:none` so it can never
+ * eat a tap (hard constraint). The zig-zag is a repeating conic-gradient
+ * masked to the top few pixels. */
+.file-torn::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -7px;
+  height: 8px;
+  pointer-events: none;
+  background: var(--color-ink-2);
+  -webkit-mask: repeating-linear-gradient(
+    -45deg,
+    #000 0 6px,
+    transparent 6px 12px
+  );
+  mask: repeating-linear-gradient(-45deg, #000 0 6px, transparent 6px 12px);
+}
+
+/* Dot-leader field row: LABEL .......... value. The leader is a repeating
+ * dotted bottom-border on a flex spacer, so it fills whatever width remains. */
+.field-leader {
+  flex: 1 1 auto;
+  align-self: end;
+  margin: 0 0.4em 0.28em;
+  border-bottom: 1.5px dotted var(--color-frame);
+  min-width: 1.5rem;
+}
+
+/* Motion — a gentle "sheet dropped on the desk" mount and a stamp-thud pulse
+ * for the consensus/lock beat. All GATED by prefers-reduced-motion below. */
+@keyframes file-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes stamp-thud {
+  0% {
+    box-shadow: 0 0 0 0 rgb(138 125 78 / 0);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgb(138 125 78 / 0.4);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgb(138 125 78 / 0);
+  }
+}
+
+.animate-rise {
+  animation: file-rise 240ms ease-out both;
+}
+
+/* Kept name `animate-brass-pulse` (NightActionDrawer references it) — now a
+ * stamp-thud in the olive accent. */
+.animate-brass-pulse {
+  animation: stamp-thud 1400ms ease-in-out 2;
+}
+
+/* Safe-area padding utilities (notches / home indicators). */
 .safe-top {
   padding-top: env(safe-area-inset-top);
 }
-
 .safe-bottom {
   padding-bottom: env(safe-area-inset-bottom);
 }
-
 .safe-x {
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
 }
 
-/* HoldToPeek affordance: defeat iOS long-press callout/selection so a
- * press-and-hold gesture doesn't trigger the system magnifier/selection
- * menu instead of the reveal. */
+/* HoldToPeek affordance: defeat iOS long-press callout/selection. */
 .no-callout {
   -webkit-touch-callout: none;
   -webkit-user-select: none;
@@ -97,11 +349,7 @@ body {
   touch-action: none;
 }
 
-/* Standard visually-hidden-but-announced pattern (Radix's own
- * VisuallyHidden primitive does the same thing; hand-rolled here since it's
- * a separate package outside D1's closed dependency budget). Used for the
- * HoldToPeek aria-live announcer and for vaul Drawer.Title/Description text
- * that only needs to exist for screen readers. */
+/* Standard visually-hidden-but-announced pattern. */
 .sr-only {
   position: absolute;
   width: 1px;
@@ -112,4 +360,18 @@ body {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border-width: 0;
+}
+
+/* Reduced-motion: disable every animation/transition the atmosphere layer
+ * introduces (the mount rise, the stamp-thud, the phase-tint fade, the
+ * ambiance cross-fade). Radix/vaul honor their own reduced-motion handling;
+ * this covers the CSS this app owns. */
+@media (prefers-reduced-motion: reduce) {
+  .phase-tint,
+  .phase-ambiance,
+  .animate-rise,
+  .animate-brass-pulse {
+    animation: none !important;
+    transition: none !important;
+  }
 }

@@ -5,42 +5,46 @@
 // so the columns that exist in both modes render identically.
 import type { HostSeatRow } from "../../store/hostView";
 import { alignmentTint } from "../../store/hostView";
+import { Badge, type BadgeVariant } from "../../components/ui/badge";
 import { roleCopyFor } from "../../lib/roleCopy";
 
-const TINT_CLASS: Record<ReturnType<typeof alignmentTint>, string> = {
-  blood: "text-blood",
-  bone: "text-bone",
-  brass: "text-brass",
-  smoke: "text-smoke",
+// Alignment tint -> role Badge variant (all lowercase keys — safe against the
+// player-privacy innerHTML scan; see badge.tsx). This is the host console, so
+// the human-readable role name is allowed here regardless.
+const ROLE_BADGE_VARIANT: Record<ReturnType<typeof alignmentTint>, BadgeVariant> = {
+  blood: "role-mafia",
+  bone: "role-town",
+  brass: "role-neutral",
+  smoke: "neutral",
 };
 
 function StatusCell({ row }: { row: HostSeatRow }) {
   if (!row.alive) {
-    return <span className="text-smoke">dead</span>;
+    return <Badge variant="muted">dead</Badge>;
   }
   if (row.absent) {
-    return <span className="text-brass">absent</span>;
+    return <Badge variant="active">absent</Badge>;
   }
   switch (row.status.kind) {
     case "voted":
-      return <span className="text-brass">voted</span>;
+      return <Badge variant="active">voted</Badge>;
     case "not-voted":
-      return <span className="text-smoke">pending</span>;
+      return <Badge variant="muted">pending</Badge>;
     // Night phase, per-seat `players[].acted` (Spec 02 v2.7): "acted" for a
     // submitted night action/mafia-consensus vote, "pending" for a seat that
     // owes one and hasn't yet, "asleep" for a seat with no owed action this
     // phase (villager/minion/bomber-style roles) — never a fabricated
     // pending for a role with nothing to submit.
     case "acted":
-      return <span className="text-brass">acted</span>;
+      return <Badge variant="active">acted</Badge>;
     case "pending":
-      return <span className="text-smoke">pending</span>;
+      return <Badge variant="muted">pending</Badge>;
     case "asleep":
-      return <span className="text-smoke">asleep</span>;
+      return <Badge variant="muted">asleep</Badge>;
     case "no-vote-phase":
-      return <span className="text-smoke">—</span>;
+      return <Badge variant="muted">—</Badge>;
     case "unknown":
-      return <span className="text-smoke">no live signal</span>;
+      return <Badge variant="muted">no live signal</Badge>;
   }
 }
 
@@ -63,7 +67,7 @@ export function PlayerTable({
     <ul className="flex w-full flex-col gap-2" data-testid="host-player-table">
       {rows.map((row) => {
         const copy = row.roleId ? roleCopyFor(row.roleId) : null;
-        const tint = TINT_CLASS[alignmentTint(row.alignment)];
+        const roleVariant = ROLE_BADGE_VARIANT[alignmentTint(row.alignment)];
         return (
           <li
             key={row.id}
@@ -72,32 +76,29 @@ export function PlayerTable({
             data-alive={row.alive}
             data-absent={row.absent}
             data-connected={row.connected}
-            className="flex min-h-11 flex-wrap items-center justify-between gap-2 rounded-md border border-smoke/60 bg-ink-2 px-4 py-2"
+            className="flex min-h-11 flex-wrap items-center justify-between gap-2 rounded-sm border border-frame bg-ink-2 px-4 py-2"
           >
             <div className="flex min-w-0 flex-1 items-center gap-3">
               <span
                 aria-hidden
                 data-testid="host-presence-dot"
                 className={`inline-block h-2 w-2 shrink-0 rounded-full ${
-                  row.connected ? "bg-brass" : "bg-smoke"
+                  row.connected ? "bg-brass-hi" : "bg-smoke/50"
                 }`}
                 title={row.connected ? "connected" : "disconnected"}
               />
-              <span className={`truncate ${row.alive ? "text-bone" : "text-smoke line-through"}`}>
+              <span className={`truncate ${row.alive ? "text-paper" : "text-smoke line-through"}`}>
                 {row.name}
               </span>
               {inGame && copy && (
-                <span
-                  data-testid="host-player-role"
-                  className={`font-display text-sm ${tint}`}
-                >
+                <Badge data-testid="host-player-role" variant={roleVariant}>
                   {copy.displayName}
-                </span>
+                </Badge>
               )}
             </div>
 
             {inGame && (
-              <span data-testid="host-player-status" className="text-xs uppercase tracking-wide">
+              <span data-testid="host-player-status">
                 <StatusCell row={row} />
               </span>
             )}
@@ -109,7 +110,7 @@ export function PlayerTable({
                     type="button"
                     data-testid="mark-present-button"
                     onClick={() => onMarkPresent?.(row.id)}
-                    className="min-h-11 rounded-md border border-brass px-2 py-1 text-xs text-brass"
+                    className="min-h-11 rounded-sm border border-brass px-2 py-1 text-[0.65rem] uppercase tracking-[0.1em] text-brass-hi"
                   >
                     Mark present
                   </button>
@@ -119,7 +120,7 @@ export function PlayerTable({
                       type="button"
                       data-testid="mark-absent-button"
                       onClick={() => onMarkAbsent?.(row.id)}
-                      className="min-h-11 rounded-md border border-smoke px-2 py-1 text-xs text-smoke"
+                      className="min-h-11 rounded-sm border border-frame px-2 py-1 text-[0.65rem] uppercase tracking-[0.1em] text-smoke"
                     >
                       Mark absent
                     </button>
@@ -130,9 +131,9 @@ export function PlayerTable({
                   type="button"
                   data-testid="kick-button"
                   onClick={() => onKick(row.id)}
-                  className="min-h-11 rounded-md border border-blood px-2 py-1 text-xs text-blood"
+                  className="min-h-11 rounded-sm border border-blood px-2 py-1 text-[0.65rem] uppercase tracking-[0.1em] text-blood"
                 >
-                  Kick
+                  Dismiss
                 </button>
               )}
             </div>
@@ -140,7 +141,7 @@ export function PlayerTable({
         );
       })}
       {rows.length === 0 && (
-        <li className="text-center text-smoke">Waiting for players to join…</li>
+        <li className="text-center text-smoke">// awaiting subjects…</li>
       )}
     </ul>
   );

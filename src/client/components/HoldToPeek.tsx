@@ -85,14 +85,14 @@ export default function HoldToPeek({
         type="button"
         data-testid="hold-to-peek"
         aria-pressed={revealed}
-        className="no-callout flex h-14 w-14 select-none items-center justify-center rounded-full border-2 border-smoke bg-ink-2 text-2xl shadow-lg active:border-brass"
+        className="no-callout flex h-14 w-14 select-none items-center justify-center rounded-sm border-2 border-frame bg-ink-2 text-2xl shadow-lg active:border-brass"
         onPointerDown={startPointerReveal}
         onPointerUp={endPointerReveal}
         onPointerCancel={endPointerReveal}
         onPointerLeave={endPointerReveal}
         onClick={handleClick}
       >
-        <span aria-hidden="true">🎭</span>
+        <span aria-hidden="true">🔍</span>
         <span className="sr-only">{label}</span>
       </button>
       <div
@@ -107,7 +107,7 @@ export default function HoldToPeek({
         data-revealed={revealed}
         className={
           revealed
-            ? "w-48 rounded-lg border border-smoke bg-ink-2 p-4 shadow-xl"
+            ? "file-frame w-48 rounded-md bg-ink-2 p-4 shadow-xl"
             : "hidden"
         }
       >

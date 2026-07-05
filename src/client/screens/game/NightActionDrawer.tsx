@@ -20,6 +20,7 @@ import { useState } from "react";
 import type { ClientGameView } from "../../../shared/game-view";
 import type { ClientPlayerView } from "../../../shared/protocol";
 import { lockAction, submitAction, unlockAction } from "../../store/gameStore";
+import { Redaction } from "../../components/ui/dossier";
 
 function TargetList({
   candidates,
@@ -32,22 +33,35 @@ function TargetList({
 }) {
   return (
     <div className="flex flex-col gap-2">
-      {candidates.map((c) => (
-        <button
-          key={c.id}
-          type="button"
-          data-testid="night-target-option"
-          data-target-id={c.id}
-          onClick={() => onPick(c.id)}
-          className={`min-h-11 rounded-md border px-4 py-3 text-left transition-colors ${
-            selectedId === c.id
-              ? "border-brass bg-ink-3 text-brass"
-              : "border-smoke bg-ink-2 text-bone"
-          }`}
-        >
-          {c.name}
-        </button>
-      ))}
+      {candidates.map((c, i) => {
+        const selected = selectedId === c.id;
+        return (
+          <button
+            key={c.id}
+            type="button"
+            data-testid="night-target-option"
+            data-target-id={c.id}
+            onClick={() => onPick(c.id)}
+            // NOTE: the selected state keeps `border-brass` — the reconnect
+            // E2E asserts `toHaveClass(/border-brass/)` on the restored pick.
+            className={`flex min-h-11 items-center gap-3 rounded-sm border px-4 py-3 text-left transition-colors ${
+              selected
+                ? "border-brass bg-ink-3 text-brass-hi"
+                : "border-frame bg-ink-2 text-paper"
+            }`}
+          >
+            <span className="text-xs tabular-nums text-smoke">
+              {String(i + 1).padStart(2, "0")}
+            </span>
+            <span className="flex-1">{c.name}</span>
+            {selected && (
+              <span aria-hidden className="text-[0.6rem] uppercase tracking-[0.15em] text-blood">
+                marked
+              </span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -58,8 +72,8 @@ function IdleTownSleeps() {
       data-testid="night-idle"
       className="flex flex-col items-center gap-3 py-10 text-center"
     >
-      <p className="font-display text-2xl text-bone">The town sleeps.</p>
-      <p className="text-sm text-smoke">Nothing to do — wait for dawn.</p>
+      <p className="file-heading text-2xl text-bone">The town sleeps</p>
+      <p className="text-sm text-smoke">// no action tonight — wait for dawn.</p>
     </div>
   );
 }
@@ -74,13 +88,13 @@ function MafiaRoster({
   return (
     <div
       data-testid="mafia-roster"
-      className="rounded-md border border-blood/60 bg-ink-3 p-3 text-sm"
+      className="rounded-sm border border-blood/60 bg-ink-3 p-3 text-sm"
     >
-      <p className="mb-1 text-xs uppercase tracking-widest text-smoke">
-        The Mafia
+      <p className="mb-1 text-[0.65rem] uppercase tracking-[0.15em] text-smoke">
+        The Syndicate
       </p>
       {mafiaRoster.length === 0 ? (
-        <p className="text-bone/80">No one else is Mafia.</p>
+        <p className="text-paper/80">No known associates.</p>
       ) : (
         <ul className="flex flex-col gap-1">
           {mafiaRoster.map((id) => (
@@ -106,15 +120,17 @@ function TeammatePicks({
   return (
     <div
       data-testid="mafia-teammate-picks"
-      className="flex flex-col gap-1 rounded-md border border-smoke/60 bg-ink-3 p-3 text-sm"
+      className="flex flex-col gap-1 rounded-sm border border-frame bg-ink-3 p-3 text-sm"
     >
-      <p className="mb-1 text-xs uppercase tracking-widest text-smoke">
-        Tonight's picks
+      <p className="mb-1 text-[0.65rem] uppercase tracking-[0.15em] text-smoke">
+        Syndicate marks tonight
       </p>
       <ul className="flex flex-col gap-1">
         {factionVotes.map((v) => {
           const isYou = v.voterId === you.playerId;
-          const label = v.targetId ? (playerNames.get(v.targetId) ?? v.targetId) : "deciding…";
+          const targetName = v.targetId
+            ? (playerNames.get(v.targetId) ?? v.targetId)
+            : null;
           return (
             <li
               key={v.voterId}
@@ -124,12 +140,28 @@ function TeammatePicks({
               data-locked={v.locked}
               className="flex items-center justify-between gap-2"
             >
-              <span className="text-bone">
+              <span className="text-paper">
                 {isYou ? "You" : (playerNames.get(v.voterId) ?? v.voterId)}
               </span>
-              <span className={v.targetId ? "text-bone/80" : "text-smoke italic"}>
-                {label} {v.locked ? "✓" : v.targetId ? "(tentative)" : ""}
-              </span>
+              {targetName ? (
+                <span className="text-paper/80">
+                  {targetName}{" "}
+                  {v.locked ? (
+                    <span aria-hidden className="text-brass-hi">
+                      ✓ locked
+                    </span>
+                  ) : (
+                    <span className="text-smoke">(tentative)</span>
+                  )}
+                </span>
+              ) : (
+                // Undecided teammate → a redaction bar over the unknown mark,
+                // with the honest "deciding…" label the mafia see live.
+                <span className="flex items-center gap-2 text-smoke italic">
+                  <Redaction width="3.5rem" label="undecided" />
+                  deciding…
+                </span>
+              )}
             </li>
           );
         })}
@@ -162,14 +194,14 @@ function MafiaNightPanel({
   const lockedCount = you.lockedCount ?? factionVotes.filter((v) => v.locked).length;
   const allLocked = totalKillers > 0 && lockedCount === totalKillers;
   const statusText = you.consensusReached
-    ? "Consensus reached."
+    ? "Order confirmed."
     : allLocked
-      ? "Everyone's locked in, but you don't agree — keep deciding."
+      ? "Everyone's locked in, but your marks disagree — keep deciding."
       : `${lockedCount} of ${totalKillers} locked · waiting…`;
 
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-sm text-smoke">Choose tonight's target.</p>
+      <p className="text-sm text-smoke">// mark one suspect for tonight.</p>
       <TargetList
         candidates={candidates}
         selectedId={myTarget}
@@ -180,10 +212,10 @@ function MafiaNightPanel({
         data-testid="lock-in-button"
         disabled={!myTarget}
         onClick={() => (iAmLocked ? unlockAction() : lockAction())}
-        className={`min-h-11 rounded-md border px-4 py-3 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+        className={`min-h-11 rounded-sm border px-4 py-3 text-sm font-bold uppercase tracking-[0.1em] transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
           iAmLocked
-            ? "border-brass bg-ink-3 text-brass"
-            : "border-smoke bg-ink-2 text-bone"
+            ? "border-brass bg-ink-3 text-brass-hi"
+            : "border-frame bg-ink-2 text-paper"
         }`}
       >
         {iAmLocked ? "Unlock" : "Lock in"}
@@ -193,9 +225,13 @@ function MafiaNightPanel({
         data-consensus-reached={you.consensusReached ?? false}
         data-locked-count={lockedCount}
         data-total-killers={totalKillers}
-        className="rounded-md border border-smoke/60 bg-ink-3 p-3 text-sm"
+        className={`rounded-sm border bg-ink-3 p-3 text-sm ${
+          you.consensusReached
+            ? "animate-brass-pulse border-brass/60"
+            : "border-frame"
+        }`}
       >
-        <p className={you.consensusReached ? "text-brass" : "text-smoke"}>
+        <p className={you.consensusReached ? "text-brass-hi" : "text-smoke"}>
           {statusText}
         </p>
       </div>
@@ -216,9 +252,9 @@ function MinionNightPanel({
 }) {
   return (
     <div className="flex flex-col items-center gap-4 py-6 text-center" data-testid="minion-idle">
-      <p className="font-display text-2xl text-bone">The town sleeps.</p>
+      <p className="file-heading text-2xl text-bone">The town sleeps</p>
       <p className="text-sm text-smoke">
-        You have no action tonight — but you know who to protect.
+        // no action tonight — but you know the syndicate.
       </p>
       <div className="w-full text-left">
         <MafiaRoster mafiaRoster={mafiaRoster} playerNames={playerNames} />
@@ -238,15 +274,15 @@ function InvestigationHistory({
   return (
     <div
       data-testid="investigation-history"
-      className="flex flex-col gap-1 rounded-md border border-smoke/60 bg-ink-3 p-3 text-sm"
+      className="flex flex-col gap-1 rounded-sm border border-frame bg-ink-3 p-3 text-sm"
     >
-      <p className="mb-1 text-xs uppercase tracking-widest text-smoke">
-        Your findings
+      <p className="mb-1 text-[0.65rem] uppercase tracking-[0.15em] text-smoke">
+        Case findings
       </p>
       {results.map((r) => (
         <p key={`${r.day}-${r.targetId}`}>
           Night {r.day}: {playerNames.get(r.targetId) ?? r.targetId} —{" "}
-          <span className={r.isMafia ? "text-blood" : "text-bone"}>
+          <span className={r.isMafia ? "text-blood" : "text-paper"}>
             {r.isMafia ? "Mafia" : "Not mafia"}
           </span>
         </p>
@@ -271,7 +307,7 @@ function DetectiveNightPanel({
 
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-sm text-smoke">Choose someone to investigate.</p>
+      <p className="text-sm text-smoke">// pull one subject's file to investigate.</p>
       <TargetList
         candidates={candidates}
         selectedId={myTarget}
@@ -305,7 +341,7 @@ function AngelNightPanel({
 
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-sm text-smoke">Choose someone to protect tonight.</p>
+      <p className="text-sm text-smoke">// place one subject under protection tonight.</p>
       <TargetList
         candidates={candidates}
         selectedId={myTarget}
@@ -325,8 +361,8 @@ function WaitingOnSubmission({
   return (
     <div data-testid="night-submitted" className="flex flex-col items-center gap-4 py-6 text-center">
       <div className="flex flex-col items-center gap-2">
-        <p className="text-brass">Your choice is locked in.</p>
-        <p className="text-sm text-smoke">Waiting for the night to end…</p>
+        <span className="stamp stamp-olive text-[0.6rem]">Filed</span>
+        <p className="text-sm text-smoke">// waiting for the night to close…</p>
       </div>
       {investigationResults && playerNames && (
         <div className="w-full text-left">
@@ -372,6 +408,13 @@ export default function NightActionDrawer({
   // collapse to a plain "locked in" waiting card once they've submitted.
   const alreadySubmitted = you.pendingAction !== undefined;
 
+  const drawerTitle =
+    roleId === "mafia"
+      ? "Who dies tonight?"
+      : roleId === "detective"
+        ? "Night interrogation"
+        : "Protective detail";
+
   return (
     // `modal={false}`: Radix/vaul's default modal behavior sets
     // `pointer-events: none` on <body>, which would make the always-available
@@ -385,11 +428,14 @@ export default function NightActionDrawer({
         <Drawer.Overlay className="fixed inset-0 z-40 bg-ink/80" />
         <Drawer.Content
           data-testid="night-action-drawer"
-          className="fixed bottom-0 left-0 right-0 z-50 mx-auto flex max-h-[85dvh] w-full max-w-md flex-col rounded-t-2xl border-t border-smoke bg-ink-2 p-6"
+          className="fixed bottom-0 left-0 right-0 z-50 mx-auto flex max-h-[85dvh] w-full max-w-md flex-col rounded-t-lg border-t-2 border-frame bg-ink-2 p-6 shadow-card"
         >
-          <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-smoke" />
+          <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-frame" />
+          <p className="text-[0.6rem] uppercase tracking-[0.35em] text-smoke">
+            After dark · File Day {game.day}
+          </p>
           <Drawer.Title asChild>
-            <h2 className="font-display text-2xl text-bone">Night falls</h2>
+            <h2 className="file-heading mt-1 text-2xl text-bone">{drawerTitle}</h2>
           </Drawer.Title>
           <Drawer.Description asChild>
             <span className="sr-only">

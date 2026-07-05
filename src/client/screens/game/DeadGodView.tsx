@@ -8,6 +8,7 @@
 import type { ClientGameView } from "../../../shared/game-view";
 import type { ClientPlayerView } from "../../../shared/protocol";
 import { roleCopyFor } from "../../lib/roleCopy";
+import { Stamp } from "../../components/ui/dossier";
 
 export default function DeadGodView({
   game,
@@ -19,17 +20,21 @@ export default function DeadGodView({
   const playerNames = new Map(players.map((p) => [p.id, p.name]));
 
   return (
-    <div data-testid="dead-god-view" className="flex flex-col gap-6 px-4 py-6">
-      <div className="rounded-md border border-blood bg-ink-2 px-4 py-3 text-center">
-        <p className="font-display text-2xl text-blood">You are dead</p>
-        <p className="text-sm text-smoke">
-          Watch the rest of the game play out.
+    <div data-testid="dead-god-view" className="animate-rise flex flex-col gap-6 px-4 py-6">
+      <div className="relative overflow-hidden rounded-sm border border-blood/60 bg-ink-2 px-4 pb-6 pt-12 text-center shadow-card">
+        <Stamp variant="deceased" decorative className="absolute left-1/2 top-4 -translate-x-1/2 text-sm" />
+        <p className="text-[0.6rem] uppercase tracking-[0.35em] text-smoke">
+          Subject removed from play
+        </p>
+        <p className="file-heading mt-1 text-3xl text-blood">You are deceased</p>
+        <p className="mt-2 text-sm text-smoke">
+          // the full file is now open to you. Watch it close.
         </p>
       </div>
 
       <div>
-        <p className="mb-2 text-xs uppercase tracking-widest text-smoke">
-          Every role
+        <p className="mb-2 text-[0.65rem] uppercase tracking-[0.2em] text-smoke">
+          The unsealed file — every subject
         </p>
         <ul className="flex flex-col gap-2" data-testid="dead-god-roles">
           {game.players.map((p) => {
@@ -39,14 +44,16 @@ export default function DeadGodView({
                 key={p.id}
                 data-testid="dead-god-role-row"
                 data-player-id={p.id}
-                className={`flex items-center justify-between rounded-md border px-4 py-2 ${
-                  p.alive ? "border-smoke/60 bg-ink-2" : "border-smoke/30 bg-ink-3 opacity-70"
+                className={`flex items-center justify-between rounded-sm border px-4 py-2 ${
+                  p.alive ? "border-frame bg-ink-2" : "border-frame/50 bg-ink-3 opacity-70"
                 }`}
               >
-                <span>{playerNames.get(p.id) ?? p.id}</span>
-                <span className={p.alive ? "text-bone" : "text-smoke"}>
+                <span className={p.alive ? "text-paper" : "text-smoke line-through"}>
+                  {playerNames.get(p.id) ?? p.id}
+                </span>
+                <span className={p.alive ? "text-paper" : "text-smoke"}>
                   {copy?.displayName ?? "Unknown"}
-                  {!p.alive && " (dead)"}
+                  {!p.alive && " · deceased"}
                 </span>
               </li>
             );
@@ -55,8 +62,8 @@ export default function DeadGodView({
       </div>
 
       <div>
-        <p className="mb-2 text-xs uppercase tracking-widest text-smoke">
-          What happened
+        <p className="mb-2 text-[0.65rem] uppercase tracking-[0.2em] text-smoke">
+          Case log
         </p>
         <ResolvedHistory game={game} playerNames={playerNames} />
       </div>

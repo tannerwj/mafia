@@ -71,7 +71,7 @@ export default function HostLog({
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="flex items-center justify-between">
-        <p className="text-xs uppercase tracking-widest text-smoke">Full log</p>
+        <p className="text-[0.65rem] uppercase tracking-[0.2em] text-smoke">Case log</p>
         {!pinned && (
           <button
             type="button"
@@ -80,7 +80,7 @@ export default function HostLog({
               setPinned(true);
               scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
             }}
-            className="text-xs text-brass underline"
+            className="text-xs text-brass-hi underline"
           >
             Jump to latest
           </button>
@@ -90,10 +90,10 @@ export default function HostLog({
         ref={scrollRef}
         onScroll={handleScroll}
         data-testid="host-log"
-        className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto rounded-md border border-smoke/60 bg-ink-3 p-3 text-sm text-bone/80"
+        className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto rounded-sm border border-frame bg-ink-3 p-3 text-sm text-paper/80"
       >
         {game.log.length === 0 ? (
-          <p className="text-smoke">Nothing has happened yet.</p>
+          <p className="text-smoke">// nothing on file yet.</p>
         ) : (
           game.log.map((event, i) => (
             <p key={i} data-testid="host-log-line">

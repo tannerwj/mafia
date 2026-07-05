@@ -3,14 +3,18 @@
 // host-only per protocol.ts — so a player simply waits here).
 import type { ClientGameView } from "../../../shared/game-view";
 import type { ClientPlayerView } from "../../../shared/protocol";
+import { Button } from "../../components/ui/button";
+import { Stamp } from "../../components/ui/dossier";
 import { roleCopyFor } from "../../lib/roleCopy";
 import { newGame } from "../../store/gameStore";
 
+// Verdict copy — the winner substrings ("village"/"mafia"/"bomber") the E2E
+// asserts on in winner-splash are preserved exactly inside these lines.
 function winnerLabel(winners: string[]): string {
-  if (winners.includes("village")) return "The village wins";
-  if (winners.includes("mafia")) return "The mafia wins";
-  if (winners.includes("suicide_bomber")) return "The suicide bomber wins";
-  return winners.length > 0 ? `${winners.join(", ")} win` : "Game over";
+  if (winners.includes("village")) return "Verdict: the village prevails";
+  if (winners.includes("mafia")) return "Verdict: the mafia prevails";
+  if (winners.includes("suicide_bomber")) return "Verdict: the suicide bomber wins alone";
+  return winners.length > 0 ? `Verdict: ${winners.join(", ")} win` : "Case closed";
 }
 
 export default function GameEnd({
@@ -26,49 +30,60 @@ export default function GameEnd({
   const winners = game.winners ?? [];
 
   return (
-    <div data-testid="game-end" className="flex flex-col gap-6 px-4 py-8 text-center">
-      <div>
-        <p className="text-xs uppercase tracking-[0.3em] text-smoke">
-          Game over
+    <div data-testid="game-end" className="animate-rise flex flex-col gap-6 px-4 py-8 text-center">
+      <div className="flex flex-col items-center gap-3 py-2">
+        <Stamp variant="case-closed" className="text-sm" />
+        <p className="text-[0.6rem] uppercase tracking-[0.35em] text-smoke">
+          File closed
         </p>
-        <h1 className="font-display text-4xl text-brass" data-testid="winner-splash">
+        <h1
+          className="file-heading text-3xl leading-none text-brass-hi"
+          data-testid="winner-splash"
+        >
           {winnerLabel(winners)}
         </h1>
       </div>
 
-      <ul className="flex flex-col gap-2 text-left" data-testid="final-roles">
-        {game.players.map((p) => {
-          const copy = p.roleId ? roleCopyFor(p.roleId) : null;
-          return (
-            <li
-              key={p.id}
-              data-testid="final-role-row"
-              data-player-id={p.id}
-              className={`flex items-center justify-between rounded-md border px-4 py-2 ${
-                p.alive ? "border-brass/50 bg-ink-2" : "border-smoke/30 bg-ink-3 opacity-70"
-              }`}
-            >
-              <span>{playerNames.get(p.id) ?? p.id}</span>
-              <span>{copy?.displayName ?? "Unknown"}</span>
-            </li>
-          );
-        })}
-      </ul>
+      <div>
+        <p className="mb-2 text-[0.65rem] uppercase tracking-[0.2em] text-smoke">
+          The unsealed file
+        </p>
+        <ul className="flex flex-col gap-2 text-left" data-testid="final-roles">
+          {game.players.map((p) => {
+            const copy = p.roleId ? roleCopyFor(p.roleId) : null;
+            return (
+              <li
+                key={p.id}
+                data-testid="final-role-row"
+                data-player-id={p.id}
+                className={`flex items-center justify-between rounded-sm border px-4 py-2 ${
+                  p.alive ? "border-brass/50 bg-ink-2" : "border-frame/50 bg-ink-3 opacity-70"
+                }`}
+              >
+                <span className={p.alive ? "text-paper" : "text-smoke line-through"}>
+                  {playerNames.get(p.id) ?? p.id}
+                </span>
+                <span>{copy?.displayName ?? "Unknown"}</span>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
 
       {isHost ? (
-        // Functional-ugly on purpose (Spec 05's job to style the host
-        // console) — the minimum trigger to let the host loop back to lobby.
-        <button
+        <Button
           type="button"
           data-testid="new-game"
+          variant="brass"
+          size="lg"
           onClick={() => newGame()}
-          className="rounded border border-stone-400 bg-stone-800 px-4 py-2 text-stone-100"
+          className="w-full max-w-sm self-center"
         >
-          New game
-        </button>
+          Open a new case
+        </Button>
       ) : (
         <p data-testid="waiting-for-host" className="text-sm text-smoke">
-          Waiting for the host to start a new game…
+          // awaiting the investigator to open a new case…
         </p>
       )}
     </div>

@@ -6,16 +6,19 @@ import type { ClientGameView } from "../../../shared/game-view";
 import type { ClientRoomState } from "../../../shared/protocol";
 import { Button } from "../../components/ui/button";
 import ConfirmDialog from "../../components/ConfirmDialog";
+import { Stamp } from "../../components/ui/dossier";
 import { roleCopyFor } from "../../lib/roleCopy";
 import { newGame } from "../../store/gameStore";
 import PrivacyChip from "./PrivacyChip";
 import HostLog from "./HostLog";
 
+// Verdict copy — the winner substrings the E2E asserts on in
+// host-winner-splash ("village"/"mafia") are preserved exactly.
 function winnerLabel(winners: string[]): string {
-  if (winners.includes("village")) return "The village wins";
-  if (winners.includes("mafia")) return "The mafia wins";
-  if (winners.includes("suicide_bomber")) return "The suicide bomber wins";
-  return winners.length > 0 ? `${winners.join(", ")} win` : "Game over";
+  if (winners.includes("village")) return "Verdict: the village prevails";
+  if (winners.includes("mafia")) return "Verdict: the mafia prevails";
+  if (winners.includes("suicide_bomber")) return "Verdict: the suicide bomber wins alone";
+  return winners.length > 0 ? `Verdict: ${winners.join(", ")} win` : "Case closed";
 }
 
 export default function HostGameEnd({ room, game }: { room: ClientRoomState; game: ClientGameView }) {
@@ -24,15 +27,24 @@ export default function HostGameEnd({ room, game }: { room: ClientRoomState; gam
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   return (
-    <main className="safe-top safe-bottom safe-x mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-6 bg-ink p-6 text-bone">
+    <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-6 bg-ink p-6 text-paper">
       <div className="flex items-center justify-between gap-2">
-        <h1 className="font-display text-2xl text-blood">Host console</h1>
+        <div className="flex flex-col">
+          <p className="text-[0.6rem] uppercase tracking-[0.3em] text-smoke">
+            Lead investigator
+          </p>
+          <h1 className="file-heading text-xl text-blood">The Case Board</h1>
+        </div>
         <PrivacyChip />
       </div>
 
-      <div className="text-center">
-        <p className="text-xs uppercase tracking-[0.3em] text-smoke">Game over</p>
-        <h2 className="font-display text-4xl text-brass" data-testid="host-winner-splash">
+      <div className="flex flex-col items-center gap-3 py-2 text-center">
+        <Stamp variant="case-closed" className="text-sm" />
+        <p className="text-[0.6rem] uppercase tracking-[0.35em] text-smoke">File closed</p>
+        <h2
+          className="file-heading text-3xl leading-none text-brass-hi"
+          data-testid="host-winner-splash"
+        >
           {winnerLabel(winners)}
         </h2>
       </div>
@@ -46,11 +58,13 @@ export default function HostGameEnd({ room, game }: { room: ClientRoomState; gam
                 key={p.id}
                 data-testid="host-final-role-row"
                 data-player-id={p.id}
-                className={`flex items-center justify-between rounded-md border px-4 py-2 ${
-                  p.alive ? "border-brass/50 bg-ink-2" : "border-smoke/30 bg-ink-3 opacity-70"
+                className={`flex items-center justify-between rounded-sm border px-4 py-2 ${
+                  p.alive ? "border-brass/50 bg-ink-2" : "border-frame/50 bg-ink-3 opacity-70"
                 }`}
               >
-                <span>{playerNames.get(p.id) ?? p.id}</span>
+                <span className={p.alive ? "text-paper" : "text-smoke line-through"}>
+                  {playerNames.get(p.id) ?? p.id}
+                </span>
                 <span>{copy?.displayName ?? "Unknown"}</span>
               </li>
             );
@@ -68,7 +82,7 @@ export default function HostGameEnd({ room, game }: { room: ClientRoomState; gam
         onClick={() => setConfirmOpen(true)}
         className="w-full"
       >
-        Start rematch
+        Open a new case
       </Button>
       <ConfirmDialog
         open={confirmOpen}
