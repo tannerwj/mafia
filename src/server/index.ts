@@ -62,13 +62,19 @@ export default {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ code }),
         });
-        const result = (await claimRes.json()) as
+        // A non-OK / non-JSON claim response (e.g. a transient DO storage
+        // error under contention) must not throw an opaque 500 out of the
+        // create-room entry point — treat it as a failed attempt and retry
+        // with a fresh code, falling through to could_not_allocate_room.
+        if (!claimRes.ok) continue;
+        const result = (await claimRes.json().catch(() => null)) as
           | { status: "claimed"; hostKey: string }
-          | { status: "taken" };
-        if (result.status === "claimed") {
+          | { status: "taken" }
+          | null;
+        if (result?.status === "claimed") {
           return json({ roomCode: code, hostKey: result.hostKey }, 201);
         }
-        // "taken" — retry with a fresh code.
+        // "taken" or an unreadable body — retry with a fresh code.
       }
 
       return json({ error: "could_not_allocate_room" }, 500);

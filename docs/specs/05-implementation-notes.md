@@ -181,7 +181,15 @@ real field end-to-end, not just that the game still resolves.
   vite/chromium processes, `rm -rf .wrangler/state` before each run): 24/24
   (17 original Spec 01/04 tests + 7 new Spec 05 tests, including the
   strengthened mark-absent stall drill that asserts the live acted/pending/
-  asleep column directly), run repeatedly across this session, zero flakes.
+  asleep column directly). Run as one combined suite twice earlier in this
+  session (24/24 both times, zero flakes); the machine's background load
+  (many unrelated concurrent node/MCP/Codex processes this session) later
+  made the combined ~3-minute single run occasionally get reaped by the
+  sandbox mid-suite with no test-level error — confirmed environmental, not
+  a regression, by re-running every spec file individually in the same
+  clean env immediately after: `lobby.spec.ts` 6/6, `game.spec.ts` 3/3,
+  `game-reconnect.spec.ts` 2/2, `game-components.spec.ts` 6/6,
+  `host-console.spec.ts` 7/7 — 24/24 total, zero failures.
 - `grep -rn "innerHTML\|dangerouslySetInnerHTML" src/client`: no hits.
 - `jq -r '.dependencies|keys[]' package.json | sort`: unchanged, exactly the
   7 packages from Spec 04's closed budget (`@fontsource-variable/
