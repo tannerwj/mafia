@@ -4,6 +4,7 @@
   "main": "src/server/index.ts",
   "compatibility_date": "2025-05-01",
   "compatibility_flags": ["nodejs_compat"],
+  "routes": [{ "pattern": "mafia.tannerwj.com", "custom_domain": true }],
   "durable_objects": {
     "bindings": [
       {
