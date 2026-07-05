@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import type { ErrorMessage } from "../../shared/protocol";
+import { shareOrCopyLink } from "../lib/shareLink";
 import {
   appendSeatBackup,
   getHostKeyBackup,
@@ -42,6 +44,10 @@ type Phase =
 export default function Room({ code }: { code: string }) {
   const [phase, setPhase] = useState<Phase>({ name: "resolving-auth" });
   const [lastError, setLastError] = useState<ErrorMessage | null>(null);
+  // Set only when both the native share sheet AND the clipboard are
+  // unavailable/denied — surfaces the room URL in a visible, selectable field
+  // so the host can long-press-copy it. Never a silent no-op.
+  const [manualShareUrl, setManualShareUrl] = useState<string | null>(null);
 
   // The store owns the single RoomConnection instance and all game-state
   // hydration (D3). Room.tsx layers only the auth-resolution/lifecycle
@@ -158,7 +164,13 @@ export default function Room({ code }: { code: string }) {
 
   function handleCopyLink() {
     const url = `${location.origin}/room/${code}`;
-    void navigator.clipboard?.writeText(url);
+    void shareOrCopyLink(url, {
+      success: (message) => {
+        setManualShareUrl(null);
+        toast(message);
+      },
+      manual: (u) => setManualShareUrl(u),
+    });
   }
 
   function handleStartGame() {
@@ -268,6 +280,7 @@ export default function Room({ code }: { code: string }) {
           ) : (
             <HostGame room={state} game={state.game} />
           )}
+          <ManualShareLink url={manualShareUrl} onDismiss={() => setManualShareUrl(null)} />
         </>
       );
     }
@@ -289,6 +302,7 @@ export default function Room({ code }: { code: string }) {
             isHost={phase.isHost}
           />
         )}
+        <ManualShareLink url={manualShareUrl} onDismiss={() => setManualShareUrl(null)} />
       </>
     );
   }
@@ -297,5 +311,36 @@ export default function Room({ code }: { code: string }) {
     <main className="flex min-h-dvh items-center justify-center bg-ink text-bone">
       <p>Connecting…</p>
     </main>
+  );
+}
+
+/** Last-resort share fallback: when neither the native share sheet nor the
+ * clipboard is available (both denied on a locked-down mobile browser), show
+ * the room URL in a visible, pre-selected, read-only input so the host can
+ * long-press-copy it. This is what makes "Share link" never a dead no-op. */
+function ManualShareLink({ url, onDismiss }: { url: string | null; onDismiss: () => void }) {
+  if (!url) return null;
+  return (
+    <div
+      data-testid="manual-share-link"
+      className="safe-x fixed inset-x-0 bottom-0 z-50 flex flex-col gap-2 border-t border-brass/60 bg-ink-2 p-4 text-bone shadow-lg"
+    >
+      <p className="text-sm text-bone/80">Copy this link and send it to your friends:</p>
+      <input
+        data-testid="manual-share-url"
+        readOnly
+        value={url}
+        onFocus={(e) => e.currentTarget.select()}
+        className="w-full select-all rounded-md border border-smoke bg-ink px-3 py-2 text-sm text-brass"
+      />
+      <button
+        type="button"
+        data-testid="manual-share-dismiss"
+        onClick={onDismiss}
+        className="min-h-11 self-end text-sm text-smoke underline"
+      >
+        Done
+      </button>
+    </div>
   );
 }

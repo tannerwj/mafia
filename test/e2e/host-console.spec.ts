@@ -195,6 +195,95 @@ test.describe("full hosted game via the console only", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Share link never dead-ends (hotfix): with the native share sheet
+// unavailable AND clipboard.writeText rejecting (the confirmed live mobile
+// Safari failure), clicking "Share link" must surface the URL for manual copy
+// — never a silent no-op. Overrides the navigator surface via addInitScript
+// before the app loads.
+// ---------------------------------------------------------------------------
+test.describe("share link degrades gracefully when clipboard is denied", () => {
+  test("surfaces the room URL for manual copy when share is absent and clipboard rejects", async ({ browser }) => {
+    const hostCtx = await browser.newContext();
+    const hostPage = await hostCtx.newPage();
+
+    // Force the worst-case mobile posture: no share sheet, clipboard denied.
+    await hostPage.addInitScript(() => {
+      delete (navigator as unknown as { share?: unknown }).share;
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: () => Promise.reject(new Error("Write permission denied")),
+        },
+      });
+    });
+
+    const roomCode = await createRoomAsHost(hostPage);
+    await expect(hostPage.getByTestId("house-rules-summary")).toBeVisible();
+
+    // Before clicking, no fallback is shown.
+    await expect(hostPage.getByTestId("manual-share-link")).toHaveCount(0);
+
+    await hostPage.getByTestId("copy-link").click();
+
+    // The fallback appears with the full, selectable room URL — proof the
+    // click did SOMETHING visible rather than silently failing.
+    const manual = hostPage.getByTestId("manual-share-link");
+    await expect(manual).toBeVisible();
+    await expect(hostPage.getByTestId("manual-share-url")).toHaveValue(
+      new RegExp(`/room/${roomCode}$`),
+    );
+
+    await hostCtx.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Start gate honesty (hotfix): the button must be gated by the engine's own
+// validateRuleset against HOUSE_RULES (min 5 players), NOT a hardcoded 3.
+// A host with 4 players must see a DISABLED button whose copy states the real
+// requirement; the 5th join flips it to an enabled "Start game". Without this
+// fix the button was enabled at 3-4 and then failed server-side validation
+// with a confusing role_count_mismatch.
+// ---------------------------------------------------------------------------
+test.describe("start gate reflects the real house-ruleset minimum", () => {
+  test("start-game is disabled at 4 players and enabled at 5", async ({ browser }) => {
+    const hostCtx = await browser.newContext();
+    const hostPage = await hostCtx.newPage();
+    const roomCode = await createRoomAsHost(hostPage);
+
+    const startBtn = hostPage.getByTestId("start-game");
+
+    // Join four players — still under the house minimum of 5.
+    const names = ["Alice", "Bob", "Carol", "Dave"];
+    const ctxs = [];
+    for (const name of names) {
+      const ctx = await browser.newContext();
+      ctxs.push(ctx);
+      const page = await ctx.newPage();
+      await joinAsPlayer(page, roomCode, name);
+    }
+
+    // Host console reflects 4 players and a gated, honest button.
+    await expect(hostPage.getByTestId("host-player-table")).toContainText("Dave");
+    await expect(startBtn).toBeDisabled();
+    await expect(startBtn).toContainText("Need at least 5 players");
+
+    // The 5th join clears the gate — button enables and shows "Start game".
+    const erinCtx = await browser.newContext();
+    ctxs.push(erinCtx);
+    const erin = await erinCtx.newPage();
+    await joinAsPlayer(erin, roomCode, "Erin");
+
+    await expect(hostPage.getByTestId("host-player-table")).toContainText("Erin");
+    await expect(startBtn).toBeEnabled();
+    await expect(startBtn).toHaveText("Start game");
+
+    await hostCtx.close();
+    for (const ctx of ctxs) await ctx.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Stall drill: night stalls on a never-submitting mafia -> host marks them
 // absent -> absent player leaves the consensus denominator -> the remaining
 // mafia's already-converged pick resolves -> game continues.

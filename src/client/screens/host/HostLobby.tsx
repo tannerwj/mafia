@@ -5,11 +5,22 @@
 import type { ClientRoomState } from "../../../shared/protocol";
 import { Button } from "../../components/ui/button";
 import { HOUSE_RULESET } from "../../lib/houseRuleset";
+import { HOUSE_RULES, validateRuleset } from "../../../engine";
 import { hostSeatRows } from "../../store/hostView";
 import { PlayerTable } from "./PlayerTable";
 import PrivacyChip from "./PrivacyChip";
 
-const MIN_PLAYERS = 3;
+// Smallest player count that clears validation for the house ruleset. Probed
+// (not hardcoded) so this stays honest if the ruleset's fixed role counts
+// change — the previous hardcoded `MIN_PLAYERS = 3` was wrong for HOUSE_RULES
+// (needs >=5), producing an enabled "Start game" that failed server-side
+// validation with a confusing role_count_mismatch error.
+function minPlayersForHouse(): number {
+  for (let n = 1; n <= 20; n++) {
+    if (validateRuleset(HOUSE_RULES, n).errors.length === 0) return n;
+  }
+  return 20;
+}
 
 function HouseRulesSummary() {
   const r = HOUSE_RULESET;
@@ -45,7 +56,11 @@ export default function HostLobby({
   onStartGame: () => void;
 }) {
   const rows = hostSeatRows(state);
-  const canStart = state.players.length >= MIN_PLAYERS;
+  // Honest start gate: mirror the server's own check. The host is a pure
+  // arbitrator (not a player), so state.players.length is the real seat count
+  // start_game will validate against.
+  const canStart = validateRuleset(HOUSE_RULES, state.players.length).errors.length === 0;
+  const minPlayers = minPlayersForHouse();
 
   return (
     <main className="safe-top safe-bottom safe-x mx-auto flex min-h-dvh w-full max-w-3xl flex-col items-center gap-6 bg-ink p-6 text-bone">
@@ -85,7 +100,7 @@ export default function HostLobby({
             variant="brass"
             className="w-full"
           >
-            {canStart ? "Start game" : `Need at least ${MIN_PLAYERS} players`}
+            {canStart ? "Start game" : `Need at least ${minPlayers} players`}
           </Button>
         </div>
       </div>
