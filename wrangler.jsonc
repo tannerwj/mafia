@@ -32,7 +32,15 @@
   "assets": {
     "not_found_handling": "single-page-application"
   },
+  // Spec 17: every trace captured (traffic is tiny; default is also 1 but
+  // we pin it so a future template change can't silently sample us down).
   "observability": {
-    "enabled": true
-  }
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  // Spec 17: metrics dataset — writeDataPoint is fire-and-forget and code
+  // must no-op safely when the binding is absent (tests).
+  "analytics_engine_datasets": [
+    { "binding": "METRICS", "dataset": "mafia_metrics" }
+  ]
 }
