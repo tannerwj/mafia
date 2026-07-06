@@ -452,3 +452,38 @@ history above, and `CLAUDE.md` (operating rules + "process rules learned").
   playtests: a 1-night parity game gives the model thin material; first
   spin invented a fictional camper (fiction, not a leak) — judge prompt
   quality at a real multi-night table before tuning.
+
+## 2026-07-06 — POLISH BATCH: Specs 16 (front door), 17 (ops), 18 (responsive)
+- Tanner kicked a polish phase: SEO/home audit + DO-cleanup/observability
+  audit (two Explore agents), then "do them all" on the idea slate.
+- Spec 16 front door (050ff2e): landing explainer below untouched hero
+  (pitch/how-it-runs/cast/house facts, reuses roleCopy + InstructionsContent),
+  canonical + robots.txt (Disallow /room/) + sitemap + WebApplication
+  JSON-LD + manifest screenshots (real captures); per-room OG invite cards
+  + noindex via HTMLRewriter (URL-code-only, regex-guarded, no DO reads);
+  QR join on host lobby via a from-scratch decode-verified QR encoder (no
+  dependency). GOTCHA burned in: assets `run_worker_first` as a list makes
+  the dev asset layer answer unlisted paths — POST /api/rooms got a static
+  405 until "/api/*" was added; 46/50 E2E failed until then.
+- Spec 17 ops (2b2bd59): structured logEvent (12 events incl. every AI
+  generate attempt w/ outcome+latency, alarm drift, ws close codes, wipe
+  reasons) under a unit-tested log-hygiene walker (no roles/tokens/targets/
+  votes/names/story text); Analytics Engine metrics (blobs[0]=metric name,
+  no-op without binding) + docs/RUNBOOK.md (SQL: games/week, story p95 +
+  failure rate, alarm drift; wrangler tail playbooks); client ErrorBoundary
+  ("THE CASE FILE JAMMED") + onerror/unhandledrejection -> sendBeacon
+  /api/client-error (204, 8KB/5-per-load caps); lifecycle: ENDED_TTL 2h,
+  alarm re-arm invariant documented on ws accept, STORY_RATE_LIMIT_KEY
+  named+cleared on rematch, GAME_STARTED_AT_KEY for durationMs. Fact
+  correction vs audit: Workers Logs default sampling is 100%, not 1%.
+- Spec 18 responsive: ROOT CAUSE — unlayered .safe-x/.safe-top/.safe-bottom
+  beat Tailwind v4 layered padding utilities on every element carrying
+  both, zeroing horizontal padding on room screens at phone widths (side
+  insets are 0 in portrait); desktop hid it via max-w centering. Fix:
+  @utility page-p/page-p-sm/page-p-bottom/safe-p*/chip-inset-* with
+  max(base, env(inset)) — insets add, never replace; header wrap +
+  PrivacyChip truncation <400px; full sweep; latent HoldToPeek
+  missing-horizontal-inset bug fixed; new mobile-viewport E2E guard
+  (no-horizontal-overflow + min padding, testid-anchored + polled after
+  an anchor-race fix). Verified: 358 unit + E2E 51/51 + live 360px tour.
+- All three committed, NOT yet deployed (batch deploy pending Tanner).

@@ -128,15 +128,15 @@ export default function HostGame({ room, game }: { room: ClientRoomState; game: 
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   return (
-    <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-4 bg-ink p-4 text-paper">
-      <div className="flex items-center justify-between gap-2">
+    <main className="page-p-sm relative z-10 mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-4 bg-ink text-paper">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2">
         <div className="flex flex-col">
           <p className="text-[0.6rem] uppercase tracking-[0.3em] text-smoke">
             Lead investigator
           </p>
           <h1 className="file-heading text-xl text-blood">The Case Board</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <StorytellerSetupButton story={room.story} />
           <HelpButton />
           <PrivacyChip />
@@ -193,7 +193,7 @@ export default function HostGame({ room, game }: { room: ClientRoomState; game: 
               <Drawer.Description asChild>
                 <span className="sr-only">Host controls for the current phase.</span>
               </Drawer.Description>
-              <div className="safe-bottom mt-4 overflow-y-auto">
+              <div className="safe-pb mt-4 overflow-y-auto">
                 <Controls game={game} />
               </div>
             </Drawer.Content>

@@ -367,7 +367,7 @@ export default function NightActionDrawer({
             <span className="sr-only">Your night action for day {game.day}.</span>
           </Drawer.Description>
 
-          <div className="safe-bottom mt-4 overflow-y-auto">
+          <div className="safe-pb mt-4 overflow-y-auto">
             {isMafia ? (
               <MafiaNightPanel you={you} players={game.players} playerNames={playerNames} />
             ) : isDecoy ? (

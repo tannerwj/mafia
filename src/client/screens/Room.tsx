@@ -246,7 +246,7 @@ export default function Room({ code }: { code: string }) {
 
   if (phase.name === "not-found") {
     return (
-      <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-5 bg-ink p-6 text-paper">
+      <main className="page-p relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-5 bg-ink text-paper">
         <span className="stamp stamp-red text-sm">No such file</span>
         <p data-testid="room-not-found" className="text-center text-lg">
           No case file with that code — check it and try again.
@@ -260,7 +260,7 @@ export default function Room({ code }: { code: string }) {
 
   if (phase.name === "kicked") {
     return (
-      <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-5 bg-ink p-6 text-paper">
+      <main className="page-p relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-5 bg-ink text-paper">
         <span className="stamp stamp-red text-sm">Case closed</span>
         <p data-testid="kicked-message" className="text-center text-lg">
           You were removed from this case file.
@@ -285,7 +285,7 @@ export default function Room({ code }: { code: string }) {
 
   if (phase.name === "offering-host-recovery") {
     return (
-      <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-6 bg-ink p-6 text-paper">
+      <main className="page-p relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-6 bg-ink text-paper">
         <p className="text-[0.65rem] uppercase tracking-[0.3em] text-smoke">
           Credentials on file
         </p>
@@ -401,7 +401,7 @@ function ManualShareLink({ url, onDismiss }: { url: string | null; onDismiss: ()
   return (
     <div
       data-testid="manual-share-link"
-      className="safe-x fixed inset-x-0 bottom-0 z-50 flex flex-col gap-2 border-t border-brass/60 bg-ink-2 p-4 text-paper shadow-lg"
+      className="page-p-bottom fixed inset-x-0 bottom-0 z-50 flex flex-col gap-2 border-t border-brass/60 bg-ink-2 pt-4 text-paper shadow-lg"
     >
       <p className="text-sm text-paper/80">
         // Copy this reference and send it to your subjects:

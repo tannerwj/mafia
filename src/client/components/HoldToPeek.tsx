@@ -80,7 +80,7 @@ export default function HoldToPeek({
   // otherwise cover an in-flow button underneath it. Persistent chrome, same
   // class as the connection banner — not scoped to any one phase screen.
   return (
-    <div className="fixed right-3 top-3 z-60 flex flex-col items-center gap-2 safe-top">
+    <div className="chip-inset-tr fixed z-60 flex flex-col items-center gap-2">
       <button
         type="button"
         data-testid="hold-to-peek"

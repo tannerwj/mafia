@@ -28,7 +28,7 @@ export default function HostGameEnd({ room, game }: { room: ClientRoomState; gam
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   return (
-    <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-6 bg-ink p-6 text-paper">
+    <main className="page-p relative z-10 mx-auto flex min-h-dvh w-full max-w-3xl flex-col gap-6 bg-ink text-paper">
       <div className="flex items-center justify-between gap-2">
         <div className="flex flex-col">
           <p className="text-[0.6rem] uppercase tracking-[0.3em] text-smoke">

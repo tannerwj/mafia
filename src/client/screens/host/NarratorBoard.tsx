@@ -77,7 +77,7 @@ export default function NarratorBoard({
 
   return (
     <div data-testid="narrator-vote-board" className="flex min-h-0 flex-col gap-3">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
         <p className="text-[0.65rem] uppercase tracking-[0.2em] text-smoke">Narrator board</p>
         <div data-testid="board-phase-nav" className="flex items-center gap-2">
           <button

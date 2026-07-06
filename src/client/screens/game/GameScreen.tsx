@@ -104,7 +104,7 @@ export default function GameScreen({
     <main
       data-testid="game-screen"
       data-phase={game.phase}
-      className="phase-tint safe-top safe-bottom safe-x relative mx-auto flex min-h-dvh w-full max-w-md flex-col text-bone"
+      className="phase-tint safe-pt safe-pb safe-px relative mx-auto flex min-h-dvh w-full max-w-md flex-col text-bone"
       data-tint={fading ? "fading" : tint}
     >
       {/* Decorative phase wash (Spec 09 D1) — CSS keyed off this <main>'s
@@ -120,7 +120,7 @@ export default function GameScreen({
           investigationResults={you.investigationResults}
         />
       )}
-      <HelpButton className="fixed bottom-3 right-3 z-60 flex h-11 w-11 items-center justify-center rounded-sm border-2 border-frame bg-ink-2 text-lg text-paper shadow-lg safe-bottom safe-x" />
+      <HelpButton className="chip-inset-br fixed z-60 flex h-11 w-11 items-center justify-center rounded-sm border-2 border-frame bg-ink-2 text-lg text-paper shadow-lg" />
 
       {/* Spec 12 Feature 3: the always-available all-player status panel. Shown
           for every in-game player screen (living or dead) except the end

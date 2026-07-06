@@ -31,7 +31,7 @@ export default function MyRoleButton({
         data-testid="my-role-button"
         aria-label="My role"
         onClick={() => setOpen(true)}
-        className="fixed bottom-3 left-3 z-60 flex h-11 min-w-11 items-center gap-2 rounded-sm border-2 border-frame bg-ink-2 px-4 text-xs font-bold uppercase tracking-[0.1em] text-paper shadow-lg safe-bottom safe-x active:border-brass"
+        className="chip-inset-bl fixed z-60 flex h-11 min-w-11 items-center gap-2 rounded-sm border-2 border-frame bg-ink-2 px-4 text-xs font-bold uppercase tracking-[0.1em] text-paper shadow-lg active:border-brass"
       >
         <span aria-hidden="true">🗂</span>
         My File

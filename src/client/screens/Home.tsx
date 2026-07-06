@@ -216,7 +216,7 @@ export default function Home() {
 
   return (
     <div className="flex w-full flex-col items-center bg-ink">
-      <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-9 bg-ink p-6 text-paper">
+      <main className="page-p relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-9 bg-ink text-paper">
       <div className="animate-rise flex flex-col items-center gap-3">
         <p className="text-[0.7rem] uppercase tracking-[0.4em] text-smoke">
           Case File No. 187

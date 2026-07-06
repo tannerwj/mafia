@@ -35,7 +35,7 @@ export default function GameStatus({
         type="button"
         data-testid="game-status-button"
         onClick={() => setOpen(true)}
-        className="fixed left-3 top-3 z-60 flex h-11 items-center gap-2 rounded-sm border-2 border-frame bg-ink-2 px-3 text-[0.6rem] font-bold uppercase tracking-[0.15em] text-brass-hi shadow-lg safe-top safe-x"
+        className="chip-inset-tl fixed z-60 flex h-11 items-center gap-2 rounded-sm border-2 border-frame bg-ink-2 px-3 text-[0.6rem] font-bold uppercase tracking-[0.15em] text-brass-hi shadow-lg"
       >
         The Case So Far
       </button>

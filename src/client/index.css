@@ -329,16 +329,84 @@ body {
   animation: stamp-thud 1400ms ease-in-out 2;
 }
 
-/* Safe-area padding utilities (notches / home indicators). */
-.safe-top {
+/* ---------------------------------------------------------------------------
+ * Safe-area insets (Spec 18 fix). The old `.safe-top`/`.safe-bottom`/`.safe-x`
+ * utilities set `padding-*` directly and were unlayered CSS, which beats every
+ * Tailwind v4 layered utility — so any element carrying BOTH one of those AND
+ * a same-axis Tailwind padding utility (e.g. `p-6`) had its padding silently
+ * REPLACED by the inset (0 on desktop and 0 on phones in portrait, since side
+ * insets only exist in landscape/notch-side). Result: room screens rendered
+ * flush against the viewport edge at phone widths.
+ *
+ * Fix: insets now ADD to a base via `@utility` (Tailwind v4's own layer, so it
+ * composes/overrides predictably with other utilities) using `max()` so the
+ * inset only grows the padding, never shrinks below the base. Page containers
+ * use `.page-px`/`.page-py` INSTEAD OF `p-*`/`px-*`/`py-*` (never alongside —
+ * that would just reintroduce the same footgun). Fixed-position chips that
+ * need insets added to their OFFSET (not padding) get their own utilities
+ * below.
+ * --------------------------------------------------------------------------- */
+/* `page-p`/`page-p-sm`: the two base paddings the old `p-6`/`p-4` page mains
+ * used, each with insets ADDED on all four sides via `max()`. Use ONE of
+ * these INSTEAD OF `p-*`/`px-*`/`py-*` on the same element — never alongside,
+ * or the same override footgun comes back. */
+@utility page-p {
+  padding-top: max(1.5rem, env(safe-area-inset-top));
+  padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+  padding-left: max(1.5rem, env(safe-area-inset-left));
+  padding-right: max(1.5rem, env(safe-area-inset-right));
+}
+@utility page-p-sm {
+  padding-top: max(1rem, env(safe-area-inset-top));
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+}
+/* Bottom sheets/drawers/fixed-bottom bars: horizontal + bottom only (no top
+ * inset — these sit at/near the bottom edge, not the notch). Matches the
+ * `p-4` base every call site used. Use INSTEAD OF `p-4`/`px-4`/`pb-4`. */
+@utility page-p-bottom {
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+/* Fixed full-width top banners (ConnectionBanner): top inset only, no base
+ * (the banner has no vertical padding to preserve otherwise). */
+@utility safe-pt {
   padding-top: env(safe-area-inset-top);
 }
-.safe-bottom {
+/* Scrollable drawer body: bottom inset only, no base padding to preserve
+ * (these never carried a competing `pb-*`) — safe to keep as an
+ * inset-only utility. */
+@utility safe-pb {
   padding-bottom: env(safe-area-inset-bottom);
 }
-.safe-x {
+/* GameScreen's outer frame: zero base horizontal padding by design (its
+ * phase-content children own their own `px-4`/`px-6`) — insets only, no
+ * competing Tailwind px-* utility ever sits alongside this one. */
+@utility safe-px {
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
+}
+
+/* Fixed-position chip offsets: base gap (0.75rem, matches the old `-3`
+ * Tailwind spacing scale step) PLUS the relevant inset(s), so a notch/home
+ * indicator pushes the chip further in rather than replacing its offset. */
+@utility chip-inset-tl {
+  top: max(0.75rem, calc(0.75rem + env(safe-area-inset-top)));
+  left: max(0.75rem, calc(0.75rem + env(safe-area-inset-left)));
+}
+@utility chip-inset-tr {
+  top: max(0.75rem, calc(0.75rem + env(safe-area-inset-top)));
+  right: max(0.75rem, calc(0.75rem + env(safe-area-inset-right)));
+}
+@utility chip-inset-bl {
+  bottom: max(0.75rem, calc(0.75rem + env(safe-area-inset-bottom)));
+  left: max(0.75rem, calc(0.75rem + env(safe-area-inset-left)));
+}
+@utility chip-inset-br {
+  bottom: max(0.75rem, calc(0.75rem + env(safe-area-inset-bottom)));
+  right: max(0.75rem, calc(0.75rem + env(safe-area-inset-right)));
 }
 
 /* HoldToPeek affordance: defeat iOS long-press callout/selection. */

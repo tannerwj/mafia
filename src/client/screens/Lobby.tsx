@@ -58,7 +58,7 @@ export default function Lobby({
   onStartGame: () => void;
 }) {
   return (
-    <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center gap-6 bg-ink p-6 text-paper">
+    <main className="page-p relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center gap-6 bg-ink text-paper">
       <div className="flex w-full items-center justify-between gap-2">
         <div className="flex flex-col">
           <p className="text-[0.65rem] uppercase tracking-[0.3em] text-smoke">

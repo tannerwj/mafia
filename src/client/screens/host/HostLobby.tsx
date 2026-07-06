@@ -252,9 +252,9 @@ export default function HostLobby({
   }
 
   return (
-    <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-3xl flex-col items-center gap-6 bg-ink p-6 text-paper">
-      <div className="flex w-full items-center justify-between gap-2">
-        <div className="flex items-center gap-3">
+    <main className="page-p relative z-10 mx-auto flex min-h-dvh w-full max-w-3xl flex-col items-center gap-6 bg-ink text-paper">
+      <div className="flex w-full flex-wrap items-center justify-between gap-x-2 gap-y-3">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="flex flex-col">
             <p className="text-[0.6rem] uppercase tracking-[0.3em] text-smoke">
               Lead investigator
@@ -263,7 +263,7 @@ export default function HostLobby({
           </div>
           <Stamp variant="confidential" className="hidden text-[0.6rem] sm:inline-flex" />
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <HelpButton />
           <PrivacyChip />
         </div>

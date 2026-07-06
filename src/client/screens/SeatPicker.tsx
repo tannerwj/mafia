@@ -27,7 +27,7 @@ export default function SeatPicker({
   }
 
   return (
-    <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-8 bg-ink p-6 text-paper">
+    <main className="page-p relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-8 bg-ink text-paper">
       <div className="animate-rise flex flex-col items-center gap-2 text-center">
         <p className="text-[0.65rem] uppercase tracking-[0.3em] text-smoke">
           Report for questioning
