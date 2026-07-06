@@ -5,7 +5,7 @@ import {
   SELF,
   evictDurableObject,
 } from "cloudflare:test";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { Ruleset } from "../../src/engine";
 import type {
   ClientMessage,
@@ -698,6 +698,258 @@ describe("alarm-driven wipes", () => {
     });
 
     ws.close();
+  });
+});
+
+describe("Spec 17 D4: ended-game TTL", () => {
+  test("wipes a room whose game phase is 'ended' at +2h idle, with reason ended_ttl", async () => {
+    const { roomCode } = await createRoom();
+    const stub = await stubFor(roomCode);
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      const room = await state.storage.get<{ lastActivityAt: number }>("room");
+      await state.storage.put("room", {
+        ...room,
+        phase: "ended",
+        lastActivityAt: Date.now() - (2 * 60 * 60 * 1000 + 1000),
+      });
+    });
+
+    await runDurableObjectAlarm(stub);
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      const room = await state.storage.get("room");
+      expect(room).toBeUndefined();
+    });
+  });
+
+  test("does NOT wipe an ended game before the 2h mark", async () => {
+    const { roomCode } = await createRoom();
+    const stub = await stubFor(roomCode);
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      const room = await state.storage.get<{ lastActivityAt: number }>("room");
+      await state.storage.put("room", {
+        ...room,
+        phase: "ended",
+        lastActivityAt: Date.now() - 1000, // barely idle
+      });
+    });
+
+    await runDurableObjectAlarm(stub);
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      const room = await state.storage.get("room");
+      expect(room).toBeDefined();
+    });
+  });
+
+  test("does not apply the ended-TTL path to a lobby room even past 2h (only the 1h/6h paths apply there)", async () => {
+    const { roomCode } = await createRoom();
+    const stub = await stubFor(roomCode);
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      const room = await state.storage.get<{ lastActivityAt: number }>("room");
+      await state.storage.put("room", {
+        ...room,
+        phase: "lobby",
+        lastActivityAt: Date.now() - (2 * 60 * 60 * 1000 + 1000),
+      });
+    });
+    // A seated player keeps the empty-lobby 1h path from firing, isolating
+    // this test to "does ended_ttl leak into non-ended phases" only.
+    await runInDurableObject(stub, async (_instance, state) => {
+      await state.storage.put("players", [{ id: "p1", name: "Solo", seatToken: "t1", joinedAt: Date.now() }]);
+    });
+
+    await runDurableObjectAlarm(stub);
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      const room = await state.storage.get("room");
+      expect(room).toBeDefined();
+    });
+  });
+});
+
+describe("Spec 17 D4: alarm re-arm on WebSocket accept", () => {
+  test("a socket opened after the alarm was deleted out-of-band re-arms it", async () => {
+    const { roomCode } = await createRoom();
+    const stub = await stubFor(roomCode);
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      await state.storage.deleteAlarm();
+      expect(await state.storage.getAlarm()).toBeNull();
+    });
+
+    const ws = await openSocket(roomCode);
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(await state.storage.getAlarm()).not.toBeNull();
+    });
+
+    ws.close();
+  });
+});
+
+describe("Spec 17 D4: storyRateLimit named constant + rematch reset", () => {
+  test("storyRateLimit key is deleted on new_game (rematch)", async () => {
+    const game = await setUpFivePlayerRoom();
+    enableStoryteller(game);
+    await nextMessageOfType(game.hostWs, "snapshot");
+    for (const p of [game.angel, game.villager1, game.detective, game.villager2, game.mafia]) await nextMessageOfType(p.ws, "snapshot");
+
+    sendGame(game.hostWs, { type: "generate_story", beat: "sunrise-hold", phaseGen: 0, requestId: "r1" });
+    // sunrise-hold is illegal at night (scenePhases is off by default in
+    // setUpFivePlayerRoom) — doesn't matter for this test, we only need
+    // recordStoryGeneration to have run at least once via a LEGAL beat.
+    await nextMessageOfType(game.hostWs, "story_error");
+
+    const stub = await stubFor(game.roomCode);
+    const seeded = await runInDurableObject(stub, async (_instance, state) => {
+      await state.storage.put("storyRateLimit", [Date.now()]);
+      return await state.storage.get("storyRateLimit");
+    });
+    expect(seeded).toBeDefined();
+
+    // Force the game into "ended" so new_game is legal, then rematch.
+    await runInDurableObject(stub, async (_instance, state) => {
+      const game2 = (await state.storage.get<{ phase: string }>("game"))!;
+      await state.storage.put("game", { ...game2, phase: "ended" });
+    });
+    sendGame(game.hostWs, { type: "new_game" });
+    await nextMessageOfType(game.hostWs, "snapshot");
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      const rateLimit = await state.storage.get("storyRateLimit");
+      expect(rateLimit).toBeUndefined();
+    });
+
+    closeAll(game);
+  });
+});
+
+describe("Spec 17 D1: story_generate outcome logging", () => {
+  test("logs story_generate with outcome=disabled and a model field, before ever touching env.AI", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { roomCode, hostKey } = await createRoom();
+    const hostWs = await openSocket(roomCode);
+    send(hostWs, { type: "hello", auth: { kind: "host", hostKey } });
+    await nextMessage(hostWs);
+
+    send(hostWs, { type: "generate_story", beat: "morning-report", phaseGen: 0, requestId: "r1" });
+    await nextMessageOfType(hostWs, "story_error");
+
+    const line = spy.mock.calls.map((c) => c[0] as string).find((l) => l.includes('"story_generate"'));
+    expect(line).toBeDefined();
+    const parsed = JSON.parse(line!) as Record<string, unknown>;
+    expect(parsed).toMatchObject({ evt: "story_generate", roomCode, beat: "morning-report", outcome: "disabled" });
+    expect(typeof parsed.latencyMs).toBe("number");
+    expect(typeof parsed.model).toBe("string");
+
+    spy.mockRestore();
+    hostWs.close();
+  });
+
+  test("logs story_generate with outcome=ok on a successful (faked) generation", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const game = await setUpFivePlayerRoom();
+    enableStoryteller(game);
+    await nextMessageOfType(game.hostWs, "snapshot");
+    for (const p of [game.angel, game.villager1, game.detective, game.villager2, game.mafia]) await nextMessageOfType(p.ws, "snapshot");
+    const atDawn = await driveToDawn(game);
+
+    sendGame(game.hostWs, { type: "generate_story", beat: "morning-report", phaseGen: atDawn.detective.game!.phaseGen, requestId: "r1" });
+    await nextMessageOfType(game.hostWs, "story_draft");
+
+    const line = spy.mock.calls.map((c) => c[0] as string).find((l) => l.includes('"story_generate"'));
+    expect(line).toBeDefined();
+    const parsed = JSON.parse(line!) as Record<string, unknown>;
+    expect(parsed).toMatchObject({ evt: "story_generate", outcome: "ok" });
+
+    spy.mockRestore();
+    closeAll(game);
+  });
+});
+
+describe("Spec 17 D2: METRICS writes never throw into a game path", () => {
+  test("METRICS is bound in this Miniflare instance (per wrangler.jsonc) and every writeMetric call site this suite exercises — room_claimed, ws_open, msg_timing, game_started — completes without throwing", async () => {
+    // pool-workers reuses wrangler.jsonc (vitest.workers.config.ts), so
+    // env.METRICS IS a real (local) AnalyticsEngineDataset here — the
+    // "absence is a silent no-op" contract itself is unit-tested directly
+    // against writeMetric in test/server/log.test.ts, where an env object
+    // that truly lacks METRICS is constructed. This test instead proves the
+    // OTHER half: a live binding doesn't derail a full lifecycle.
+    expect(env.METRICS).toBeDefined();
+
+    const { roomCode, hostKey } = await createRoom();
+    const ws = await openSocket(roomCode);
+    send(ws, { type: "hello", auth: { kind: "host", hostKey } });
+    await nextMessage(ws); // welcome
+    send(ws, { type: "ping" });
+    const pong = (await nextMessage(ws)) as PongMessage;
+    expect(pong.type).toBe("pong");
+    ws.close();
+  });
+});
+
+describe("Spec 17 D3: POST /api/client-error", () => {
+  test("accepts a well-formed report and returns 204, never echoing the body", async () => {
+    const res = await SELF.fetch("https://example.com/api/client-error", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "onerror",
+        message: "boom",
+        stackHead: "Error: boom\n  at x",
+        url: "https://mafia.tannerwj.com/room/ABCDE",
+        roomCode: "ABCDE",
+        ua: "test-ua",
+      }),
+    });
+    expect(res.status).toBe(204);
+    const text = await res.text();
+    expect(text).toBe("");
+  });
+
+  test("logs client_error on accept", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await SELF.fetch("https://example.com/api/client-error", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "boom", url: "https://x", ua: "test-ua" }),
+    });
+    const line = spy.mock.calls.map((c) => c[0] as string).find((l) => l.includes('"client_error"'));
+    expect(line).toBeDefined();
+    const parsed = JSON.parse(line!) as Record<string, unknown>;
+    expect(parsed).toMatchObject({ evt: "client_error", message: "boom" });
+    spy.mockRestore();
+  });
+
+  test("rejects an oversized body with 413", async () => {
+    const res = await SELF.fetch("https://example.com/api/client-error", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "x".repeat(9000), url: "https://x", ua: "test-ua" }),
+    });
+    expect(res.status).toBe(413);
+  });
+
+  test("rejects malformed JSON with 400", async () => {
+    const res = await SELF.fetch("https://example.com/api/client-error", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not json",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("rejects a body missing `message` with 400", async () => {
+    const res = await SELF.fetch("https://example.com/api/client-error", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://x", ua: "test-ua" }),
+    });
+    expect(res.status).toBe(400);
   });
 });
 

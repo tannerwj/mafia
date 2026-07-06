@@ -5,9 +5,14 @@
 // handled by the Cloudflare Vite plugin / [assets] binding, so anything that
 // is not an /api route falls through to assets automatically.
 export { GameRoom } from "./game-room";
+import { logEvent } from "./log";
+import { writeMetric } from "./metrics";
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const ROOM_CODE_LENGTH = 5;
+// Spec 17 D3: client error reports. Plain route, NO DO involvement — this is
+// diagnostic-only, never touches game state or requires auth.
+const CLIENT_ERROR_MAX_BYTES = 8 * 1024;
 const MAX_CLAIM_ATTEMPTS = 5;
 
 const WS_ROUTE = /^\/api\/rooms\/([^/]+)\/ws$/;
@@ -111,6 +116,45 @@ export default {
       // existence (404s if unclaimed) — no need to pre-check here.
       const upgradeReq = new Request("https://do/internal/ws", request);
       return stub.fetch(upgradeReq);
+    }
+
+    // Spec 17 D3: client error reports. Plain route, NO DO involvement, no
+    // auth (it's diagnostic) — never echoes the body back.
+    if (url.pathname === "/api/client-error" && request.method === "POST") {
+      const contentLength = request.headers.get("content-length");
+      if (contentLength !== null && Number(contentLength) > CLIENT_ERROR_MAX_BYTES) {
+        return new Response(null, { status: 413 });
+      }
+      const bodyText = await request.text();
+      if (bodyText.length > CLIENT_ERROR_MAX_BYTES) {
+        return new Response(null, { status: 413 });
+      }
+      let payload: { message?: unknown; stackHead?: unknown; url?: unknown; roomCode?: unknown; ua?: unknown; kind?: unknown };
+      try {
+        payload = JSON.parse(bodyText);
+      } catch {
+        return new Response(null, { status: 400 });
+      }
+      if (typeof payload !== "object" || payload === null || typeof payload.message !== "string") {
+        return new Response(null, { status: 400 });
+      }
+      // `kind` classifies where the report came from client-side (render
+      // boundary vs. window.onerror vs. unhandledrejection) — it's the
+      // metric blob D2 asks for; defaults to "unknown" for a malformed/older
+      // client payload rather than rejecting the whole report over it.
+      const kind = typeof payload.kind === "string" ? payload.kind : "unknown";
+      const fields = {
+        roomCode: typeof payload.roomCode === "string" ? payload.roomCode : undefined,
+        message: payload.message,
+        stackHead: typeof payload.stackHead === "string" ? payload.stackHead : "",
+        url: typeof payload.url === "string" ? payload.url : "",
+        ua: typeof payload.ua === "string" ? payload.ua : "",
+      };
+      logEvent("client_error", { ...fields, kind });
+      // blobs[0] is the metric-name discriminator (matches the convention in
+      // game-room.ts's writeMetric call sites — see docs/RUNBOOK.md).
+      writeMetric(env, fields.roomCode ? { blobs: ["client_error", kind], indexes: [fields.roomCode] } : { blobs: ["client_error", kind] });
+      return new Response(null, { status: 204 });
     }
 
     if (url.pathname === "/api/rooms" && request.method === "POST") {

@@ -21,6 +21,7 @@ import {
   validateRuleset,
   type Command,
   type Effect,
+  type GameEvent,
   type GameState,
   type LobbyPlayer,
   type Ruleset,
@@ -34,6 +35,9 @@ import {
   type StoryMemory,
   type StorySettings,
 } from "./storyteller";
+import { logEvent } from "./log";
+import { tallyRoleCounts, type StoryGenerateOutcome } from "./log-events";
+import { writeMetric } from "./metrics";
 
 // ---------------------------------------------------------------------------
 // Storage schema (Spec 01). No in-memory session state anywhere — everything
@@ -78,6 +82,11 @@ const PLAYERS_KEY = "players";
 const PENDING_AUTH_KEY = "pendingAuth";
 const GAME_KEY = "game";
 const GAME_DEADLINE_KEY = "gameDeadlineAt";
+// Spec 17: when the current game (if any) started — the only durable
+// timestamp that predates a `gameEnded` effect and postdates lobby wait
+// time, so `game_ended`'s `durationMs` measures actual play, not
+// time-since-room-claim. Written in `handleStartGame`, cleared on rematch.
+const GAME_STARTED_AT_KEY = "gameStartedAt";
 // Spec 06 D1 / Spec 11: the host's pending lobby ruleset (role counts).
 // Defaulted to HOUSE_RULES at claim time; overwritten by `set_ruleset`.
 const PENDING_RULESET_KEY = "pendingRuleset";
@@ -104,6 +113,11 @@ const STORY_INFLIGHT_STALE_MS = 20_000; // past the 15s AI timeout
 const STORY_RATE_LIMIT_PER_MIN = 10;
 const STORY_AI_TIMEOUT_MS = 15_000;
 const STORY_MAX_BYTES = 32 * 1024; // ~32KB cap (§Memory) via scene trimming
+// Spec 17 D4: promoted from a hardcoded string literal at each call site (was
+// duplicated in isStoryRateLimited/recordStoryGeneration) to a named constant
+// next to the other STORY_* keys, and now deleted on rematch alongside the
+// rest of per-game story bookkeeping.
+const STORY_RATE_LIMIT_KEY = "storyRateLimit";
 
 const DEFAULT_STORY_STATE: StoryState = {
   enabled: false,
@@ -114,6 +128,11 @@ const DEFAULT_STORY_STATE: StoryState = {
 
 const AUTH_REAP_MS = 30_000;
 const EMPTY_LOBBY_TTL_MS = 60 * 60 * 1000; // 1h
+// Spec 17 D4: a room whose game has ENDED (with no live sockets) wipes 2h
+// after lastActivityAt — between the 1h empty-lobby path (which only ever
+// applies in the lobby) and the 6h absolute backstop (which still applies to
+// every other phase, including a stuck/abandoned lobby with seated players).
+const ENDED_TTL_MS = 2 * 60 * 60 * 1000; // 2h
 const ABSOLUTE_TTL_MS = 6 * 60 * 60 * 1000; // 6h
 
 const RESERVED_CLOSE_CODES = new Set([1005, 1006, 1015]);
@@ -237,6 +256,12 @@ export class GameRoom extends DurableObject<Env> {
         [];
       pending.push({ tagId, connectedAt });
       await this.ctx.storage.put(PENDING_AUTH_KEY, pending);
+      // scheduleNextAlarm() is idempotent and always run here regardless of
+      // getAlarm()'s current value — this IS the belt-and-braces re-arm
+      // (Spec 17 D4): it closes the theoretical orphan where a claim
+      // succeeded but alarm scheduling failed and the DO has stayed live
+      // ever since (so the constructor guard never got a chance to re-run).
+      // One extra storage read/write per socket open — acceptable.
       await this.scheduleNextAlarm();
 
       return new Response(null, { status: 101, webSocket: client });
@@ -266,6 +291,7 @@ export class GameRoom extends DurableObject<Env> {
     await this.ctx.storage.put(PENDING_RULESET_KEY, HOUSE_RULES);
     await this.ctx.storage.put(STORY_STATE_KEY, DEFAULT_STORY_STATE);
     await this.scheduleNextAlarm();
+    logEvent("room_claimed", { roomCode: room.code });
     return Response.json({ status: "claimed", hostKey });
   }
 
@@ -281,7 +307,49 @@ export class GameRoom extends DurableObject<Env> {
   // WebSocket message handling
   // -------------------------------------------------------------------------
 
+  // Spec 17 D1/D2 timing wrapper: every message gets a cheap `msg_timing`
+  // metric point, and a `msg_slow` log line when handling exceeds 50ms. The
+  // actual dispatch logic is unchanged below in `handleMessage` — this is
+  // purely an outer timing shell so the 50ms/always-metric pins live in
+  // exactly one place regardless of which message type came in.
   override async webSocketMessage(
+    ws: WebSocket,
+    message: string | ArrayBuffer,
+  ): Promise<void> {
+    const type = this.peekMessageType(message);
+    const start = Date.now();
+    try {
+      await this.handleMessage(ws, message);
+    } finally {
+      const ms = Date.now() - start;
+      const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+      const roomCode = room?.code ?? "unknown";
+      // blobs[0] is always the metric NAME (a discriminator so RUNBOOK.md
+      // queries can `WHERE blob1 = '...'` — every writeMetric call site in
+      // this file follows the same convention) with the event-specific
+      // blobs, if any, following it.
+      writeMetric(this.env, { doubles: [ms], blobs: ["msg_timing", type], indexes: [roomCode] });
+      if (ms > 50) {
+        logEvent("msg_slow", { roomCode, type, ms });
+      }
+    }
+  }
+
+  /** Best-effort peek at `{type}` for timing/metrics ONLY — never used for
+   * dispatch (that re-parses inside `handleMessage`, which is the sole
+   * source of truth for message validity). Returns "unknown" for anything
+   * that doesn't parse; never throws. */
+  private peekMessageType(message: string | ArrayBuffer): string {
+    if (typeof message !== "string") return "binary";
+    try {
+      const parsed = JSON.parse(message) as { type?: unknown };
+      return typeof parsed?.type === "string" ? parsed.type : "unknown";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  private async handleMessage(
     ws: WebSocket,
     message: string | ArrayBuffer,
   ): Promise<void> {
@@ -468,11 +536,13 @@ export class GameRoom extends DurableObject<Env> {
 
     if (msg.auth.kind === "host") {
       if (msg.auth.hostKey !== room.hostKey) {
+        logEvent("auth_rejected", { roomCode: room.code, reason: "bad_host_key" });
         this.sendError(ws, "bad_host_key", "Invalid host key.");
         ws.close(CLOSE_BAD_CREDENTIAL);
         return;
       }
       await this.completeAuth(ws, attachment, { kind: "host" });
+      logEvent("ws_open", { roomCode: room.code, authKind: "host" });
       const state = await this.buildStateFor({ kind: "host" });
       this.send(ws, {
         type: "welcome",
@@ -489,6 +559,7 @@ export class GameRoom extends DurableObject<Env> {
       const players = await this.getPlayers();
       const player = players.find((p) => p.seatToken === seatToken);
       if (!player) {
+        logEvent("auth_rejected", { roomCode: room.code, reason: "bad_seat_token" });
         this.sendError(ws, "bad_seat_token", "Unknown seat token.");
         ws.close(CLOSE_BAD_CREDENTIAL);
         return;
@@ -497,6 +568,7 @@ export class GameRoom extends DurableObject<Env> {
         kind: "player",
         playerId: player.id,
       });
+      logEvent("ws_open", { roomCode: room.code, authKind: "seat" });
       const state = await this.buildStateFor({
         kind: "player",
         playerId: player.id,
@@ -544,6 +616,7 @@ export class GameRoom extends DurableObject<Env> {
     await this.ctx.storage.put(PLAYERS_KEY, players);
 
     await this.completeAuth(ws, attachment, { kind: "player", playerId });
+    logEvent("ws_open", { roomCode: room.code, authKind: "join" });
     const state = await this.buildStateFor({ kind: "player", playerId });
     this.send(ws, {
       type: "welcome",
@@ -711,6 +784,10 @@ export class GameRoom extends DurableObject<Env> {
       name: p.name,
     }));
     const result = startGame(lobbyPlayers, ruleset, seed, Date.now());
+    const roleCounts = tallyRoleCounts(result.state.players);
+    await this.ctx.storage.put(GAME_STARTED_AT_KEY, Date.now());
+    logEvent("game_started", { roomCode: room.code, playerCount: players.length, roleCounts });
+    writeMetric(this.env, { doubles: [players.length], blobs: ["game_started"], indexes: [room.code] });
     await this.applyGameResult(result, null, room);
   }
 
@@ -811,6 +888,14 @@ export class GameRoom extends DurableObject<Env> {
 
     await this.ctx.storage.delete(GAME_KEY);
     await this.ctx.storage.delete(GAME_DEADLINE_KEY);
+    // Spec 17 D4 (spec-pinned): storyRateLimit resets on rematch — a fresh
+    // game is a fresh 10/min narrator budget, not a continuation of the
+    // previous game's usage.
+    await this.ctx.storage.delete(STORY_RATE_LIMIT_KEY);
+    // GAME_STARTED_AT_KEY is purely a durationMs input for the next
+    // game_ended — deleted so a rematch doesn't inherit the previous game's
+    // start time and inflate the reported duration.
+    await this.ctx.storage.delete(GAME_STARTED_AT_KEY);
     // Spec 15: narrator memory (bible + kept scenes) is per-game — cleared on
     // rematch. Settings (enabled/theme/tone) are a host preference, not game
     // state, so they're preserved across the reset. Auto-keep: a rematch is
@@ -881,6 +966,18 @@ export class GameRoom extends DurableObject<Env> {
     attachment: Attachment,
     msg: Extract<ClientMessage, { type: "generate_story" }>,
   ): Promise<void> {
+    // Spec 17 D1: every generate_story attempt — success or any rejection —
+    // logs `story_generate`, so a host reporting "the narrator stopped
+    // working" is finally diagnosable. `roomCode` is read once up front
+    // since every early-rejection branch below needs it.
+    const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+    const roomCode = room?.code ?? "unknown";
+    const attemptStart = Date.now();
+    const logGenerate = (outcome: StoryGenerateOutcome) => {
+      logEvent("story_generate", { roomCode, beat: msg.beat, outcome, latencyMs: Date.now() - attemptStart, model: this.env.STORYTELLER_MODEL });
+      writeMetric(this.env, { doubles: [Date.now() - attemptStart], blobs: ["story_generate", outcome, this.env.STORYTELLER_MODEL], indexes: [roomCode] });
+    };
+
     if (attachment.kind !== "host") {
       this.sendRejection(ws, "not_host");
       return;
@@ -888,6 +985,7 @@ export class GameRoom extends DurableObject<Env> {
 
     const story = await this.getStoryState();
     if (!story.enabled) {
+      logGenerate("disabled");
       this.sendStoryError(ws, msg.requestId, "disabled");
       return;
     }
@@ -896,10 +994,12 @@ export class GameRoom extends DurableObject<Env> {
     const currentPhase = game?.phase;
     const currentGen = game?.phaseGen;
     if (currentPhase !== BEAT_PHASE[msg.beat]) {
+      logGenerate("wrong_phase");
       this.sendStoryError(ws, msg.requestId, "wrong_phase");
       return;
     }
     if (currentGen !== msg.phaseGen) {
+      logGenerate("stale");
       this.sendStoryError(ws, msg.requestId, "stale_story");
       return;
     }
@@ -908,12 +1008,14 @@ export class GameRoom extends DurableObject<Env> {
     // second concurrent generation for this room.
     const inflight = await this.ctx.storage.get<StoryInflightRecord>(STORY_INFLIGHT_KEY);
     if (inflight && Date.now() - inflight.startedAt < STORY_INFLIGHT_STALE_MS) {
+      logGenerate("busy");
       this.sendStoryError(ws, msg.requestId, "busy");
       return;
     }
 
     const rateLimited = await this.isStoryRateLimited();
     if (rateLimited) {
+      logGenerate("rate_limited");
       this.sendStoryError(ws, msg.requestId, "rate_limited");
       return;
     }
@@ -939,9 +1041,9 @@ export class GameRoom extends DurableObject<Env> {
     // THE choke point: `{kind:"public"}` — see THE LEAK CONTRACT above.
     const view = projectFor(game!, { kind: "public" });
 
-    let output: Awaited<ReturnType<typeof this.runStoryGeneration>>;
+    let result: Awaited<ReturnType<typeof this.runStoryGeneration>>;
     try {
-      output = await this.runStoryGeneration(view, msg.beat, nameOf, story);
+      result = await this.runStoryGeneration(view, msg.beat, nameOf, story);
     } finally {
       // Clear the in-flight record regardless of outcome so a genuine
       // success/failure never leaves the room falsely "busy" — the stale
@@ -952,6 +1054,8 @@ export class GameRoom extends DurableObject<Env> {
       }
     }
 
+    logGenerate(result.outcome);
+    const output = result.output;
     if (!output) {
       this.sendToHostSockets({ type: "story_error", requestId: msg.requestId, code: "generation_failed" });
       return;
@@ -971,20 +1075,23 @@ export class GameRoom extends DurableObject<Env> {
     this.sendToHostSockets({ type: "story_draft", requestId: msg.requestId, beat: msg.beat, phaseGen: msg.phaseGen, text: output.scene });
   }
 
-  /** Runs (or fakes) the actual generation. Isolated so the try/finally above
-   * always clears the in-flight record even if this throws. */
+  /** Runs (or fakes) the actual generation. Isolated so the try/finally in
+   * the caller always clears the in-flight record even if this throws.
+   * Returns BOTH the output and the specific outcome classification (Spec
+   * 17 D1 needs to tell timeout/parse_fail/model_error apart in the
+   * `story_generate` log, not just "failed"). */
   private async runStoryGeneration(
     view: ReturnType<typeof projectFor>,
     beat: BeatId,
     nameOf: (id: string) => string,
     story: StoryState,
-  ): Promise<{ scene: string; bibleUpdates: Record<string, string> } | null> {
+  ): Promise<{ outcome: StoryGenerateOutcome; output: { scene: string; bibleUpdates: Record<string, string> } | null }> {
     const facts = buildStoryFacts(view, beat, nameOf);
     const memory: StoryMemory = { bible: story.bible, scenes: story.scenes };
     const settings: StorySettings = story.settings;
 
     if (this.env.STORYTELLER_FAKE === "1") {
-      return fakeStoryOutput(facts);
+      return { outcome: "ok", output: fakeStoryOutput(facts) };
     }
 
     const { system, user } = buildPrompt({ settings, memory, facts });
@@ -1005,10 +1112,11 @@ export class GameRoom extends DurableObject<Env> {
         temperature: 0.8,
       });
       const raced = await Promise.race([call, timeout]);
-      if (raced === null) return null; // timed out
-      return parseStoryOutput(raced);
+      if (raced === null) return { outcome: "timeout", output: null };
+      const output = parseStoryOutput(raced);
+      return output ? { outcome: "ok", output } : { outcome: "parse_fail", output: null };
     } catch {
-      return null;
+      return { outcome: "model_error", output: null };
     }
   }
 
@@ -1061,18 +1169,16 @@ export class GameRoom extends DurableObject<Env> {
    * layer, not engine — fine per spec). Stored as a rolling list of
    * timestamps; pruned on every check. */
   private async isStoryRateLimited(): Promise<boolean> {
-    const key = "storyRateLimit";
     const now = Date.now();
-    const timestamps = ((await this.ctx.storage.get<number[]>(key)) ?? []).filter((t) => now - t < 60_000);
+    const timestamps = ((await this.ctx.storage.get<number[]>(STORY_RATE_LIMIT_KEY)) ?? []).filter((t) => now - t < 60_000);
     return timestamps.length >= STORY_RATE_LIMIT_PER_MIN;
   }
 
   private async recordStoryGeneration(): Promise<void> {
-    const key = "storyRateLimit";
     const now = Date.now();
-    const timestamps = ((await this.ctx.storage.get<number[]>(key)) ?? []).filter((t) => now - t < 60_000);
+    const timestamps = ((await this.ctx.storage.get<number[]>(STORY_RATE_LIMIT_KEY)) ?? []).filter((t) => now - t < 60_000);
     timestamps.push(now);
-    await this.ctx.storage.put(key, timestamps);
+    await this.ctx.storage.put(STORY_RATE_LIMIT_KEY, timestamps);
   }
 
   /** Sends `msg` to every currently-connected HOST socket (multi-host-device
@@ -1129,7 +1235,7 @@ export class GameRoom extends DurableObject<Env> {
     meta.lastActivityAt = Date.now();
     await this.ctx.storage.put(GAME_KEY, result.state);
     await this.ctx.storage.put(ROOM_KEY, meta);
-    await this.applyEffects(result.effects);
+    await this.applyEffects(result.effects, result.state, meta);
 
     // Spec 15 auto-keep: runs STRICTLY AFTER the game-state transition above,
     // fire-safe (a storyState write failure here can never fail this phase
@@ -1143,15 +1249,29 @@ export class GameRoom extends DurableObject<Env> {
    * the state put above (no intervening await from the engine call); the
    * alarm itself is (re)armed afterward by touchAndBroadcast's call to
    * scheduleNextAlarm() — one scheduler, no second setAlarm call site. */
-  private async applyEffects(effects: Effect[]): Promise<void> {
+  private async applyEffects(effects: Effect[], state: GameState, meta: RoomMeta): Promise<void> {
     for (const effect of effects) {
       if (effect.type === "setDeadline") {
         await this.ctx.storage.put(GAME_DEADLINE_KEY, effect.at);
       } else if (effect.type === "clearDeadline") {
         await this.ctx.storage.delete(GAME_DEADLINE_KEY);
       } else if (effect.type === "gameEnded") {
-        // Nothing beyond the normal broadcast — the ended state and winners
-        // are already in `result.state`/the projected view.
+        // The win reason lives on the log entry the engine pushed in the
+        // same turn (`Effect` itself only carries `winners`) — find it
+        // rather than re-deriving anything (§reason single source of truth).
+        const logEntry = [...state.log].reverse().find(
+          (e): e is Extract<GameEvent, { type: "gameEnded" }> => e.type === "gameEnded",
+        );
+        const startedAt = await this.ctx.storage.get<number>(GAME_STARTED_AT_KEY);
+        const durationMs = startedAt !== undefined ? Date.now() - startedAt : 0;
+        logEvent("game_ended", {
+          roomCode: meta.code,
+          winners: effect.winners,
+          reason: logEntry?.reason ?? "unknown",
+          day: state.day,
+          durationMs,
+        });
+        writeMetric(this.env, { doubles: [state.day, durationMs], blobs: ["game_ended"], indexes: [meta.code] });
       }
     }
   }
@@ -1164,7 +1284,7 @@ export class GameRoom extends DurableObject<Env> {
     ws: WebSocket,
     code: number,
     _reason: string,
-    _wasClean: boolean,
+    wasClean: boolean,
   ): Promise<void> {
     const attachment = ws.deserializeAttachment() as Attachment | null;
     if (attachment?.kind === "pending") {
@@ -1175,6 +1295,10 @@ export class GameRoom extends DurableObject<Env> {
       if (filtered.length !== pending.length) {
         await this.ctx.storage.put(PENDING_AUTH_KEY, filtered);
       }
+    }
+    const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+    if (room) {
+      logEvent("ws_close", { roomCode: room.code, authKind: attachment?.kind ?? "pending", code, wasClean });
     }
     ws.close(normalizeCloseCode(code));
     await this.touchAndBroadcast({ skipActivity: true });
@@ -1190,6 +1314,10 @@ export class GameRoom extends DurableObject<Env> {
       if (filtered.length !== pending.length) {
         await this.ctx.storage.put(PENDING_AUTH_KEY, filtered);
       }
+    }
+    const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+    if (room) {
+      logEvent("ws_error", { roomCode: room.code });
     }
     await this.touchAndBroadcast({ skipActivity: true });
   }
@@ -1222,11 +1350,18 @@ export class GameRoom extends DurableObject<Env> {
       const hasLiveSocket = liveSockets(this.ctx).length > 0;
       if (!hasLiveSocket) {
         const players = await this.getPlayers();
+        const idleMs = now - room.lastActivityAt;
         const emptyLobby = room.phase === "lobby" && players.length === 0;
-        const shouldWipeEmptyLobby =
-          emptyLobby && now - room.lastActivityAt >= EMPTY_LOBBY_TTL_MS;
-        const shouldWipeTtl = now - room.lastActivityAt >= ABSOLUTE_TTL_MS;
-        if (shouldWipeEmptyLobby || shouldWipeTtl) {
+        const shouldWipeEmptyLobby = emptyLobby && idleMs >= EMPTY_LOBBY_TTL_MS;
+        // Spec 17 D4: a room whose game has ENDED wipes at the 2h mark
+        // (between the 1h empty-lobby path, which only ever applies in the
+        // lobby, and the 6h absolute backstop below).
+        const shouldWipeEndedTtl = room.phase === "ended" && idleMs >= ENDED_TTL_MS;
+        const shouldWipeTtl = idleMs >= ABSOLUTE_TTL_MS;
+        if (shouldWipeEmptyLobby || shouldWipeEndedTtl || shouldWipeTtl) {
+          const reason = shouldWipeEmptyLobby ? "empty_lobby" : shouldWipeEndedTtl ? "ended_ttl" : "absolute_ttl";
+          logEvent("room_wiped", { roomCode: room.code, reason, idleMs });
+          writeMetric(this.env, { blobs: ["room_wiped", reason], indexes: [room.code] });
           await this.ctx.storage.deleteAll();
           return;
         }
@@ -1244,7 +1379,10 @@ export class GameRoom extends DurableObject<Env> {
     );
     if (gameDeadlineAt !== undefined && now >= gameDeadlineAt) {
       const game = await this.ctx.storage.get<GameState>(GAME_KEY);
-      if (game) {
+      if (game && room) {
+        const driftMs = now - gameDeadlineAt;
+        logEvent("alarm_fired", { roomCode: room.code, kind: "game_deadline", driftMs });
+        writeMetric(this.env, { doubles: [driftMs], blobs: ["alarm_drift"], indexes: [room.code] });
         const result = applyCommand(game, {
           type: "timerExpired",
           at: gameDeadlineAt,
@@ -1339,6 +1477,11 @@ export class GameRoom extends DurableObject<Env> {
     // Spec 06 D1 / Spec 11: broadcast the pending ruleset only while in the
     // lobby (roster preview) — once a game is running the chosen ruleset lives
     // in `game`, so this is null to avoid a stale duplicate.
+    // Spec 17 D4 (deliberate, not a leak/bug): PENDING_RULESET_KEY itself is
+    // never deleted at start_game — it's gated out of snapshots mid-game by
+    // the `game ? null : ...` above, and surviving in storage preserves the
+    // host's role-count choices for the rematch lobby (handleNewGame doesn't
+    // touch it either).
     const pendingRuleset = game
       ? null
       : ((await this.ctx.storage.get<Ruleset>(PENDING_RULESET_KEY)) ?? null);
