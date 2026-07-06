@@ -1,45 +1,42 @@
-// HostLobby (D1, Spec 11 Feature 4 / Spec 06 D1 slice): player list +
-// presence + kick + room code/share + a LIVE role-count editor. The host sets
-// per-role counts with steppers (mafia / detective / angel / suicide bomber /
-// minion; villagers = remainder); `validateRuleset` runs live so Start is
-// enabled only for a legal setup, which unlocks small games (1 mafia + 2
-// villagers = 3 players). Every edit broadcasts `set_ruleset` (debounced) so
-// players see the roster (counts only) via `pendingRuleset`. The chosen
-// ruleset is handed up to `onStartGame`.
+// HostLobby (D1, Spec 11 Feature 4 / Spec 06 D1 slice; Spec 13 scaled
+// recommendations): player list + presence + kick + room code/share + a LIVE
+// role-count editor. The host sets per-role counts with steppers (mafia /
+// detective / angel / suicide bomber / minion; villagers = remainder);
+// `validateRuleset` runs live so Start is enabled only for a legal setup,
+// which unlocks small games (1 mafia + 2 villagers = 3 players). Every edit
+// broadcasts `set_ruleset` (debounced) so players see the roster (counts
+// only) via `pendingRuleset`. The chosen ruleset is handed up to
+// `onStartGame`.
+//
+// Spec 13: until the host touches a stepper, counts track
+// `recommendedRoleCounts(playerCount)` live (recomputed as players join/leave)
+// WITHOUT broadcasting — the engine's all-auto `HOUSE_RULES` already resolves
+// the same way server-side, so an untouched room needs no wire traffic. The
+// first stepper edit freezes the displayed counts to explicit numbers and
+// starts broadcasting (existing wire shape: explicit numbers + villager:
+// "auto"). "Reset to suggested" flips back to all-auto and broadcasts once so
+// players see the change too.
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClientRoomState } from "../../../shared/protocol";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Stamp } from "../../components/ui/dossier";
 import HelpButton from "../../components/HelpButton";
-import { HOUSE_RULES, autoMafiaCount, validateRuleset, type Ruleset } from "../../../engine";
+import { HOUSE_RULES, recommendedRoleCounts, validateRuleset, type Ruleset } from "../../../engine";
+import {
+  countsFromRecommendation,
+  countsFromRuleset,
+  EDITABLE_ROLES,
+  isAllAuto,
+  suggestionHint,
+  type Counts,
+} from "../../lib/hostRoleCounts";
 import { setRuleset as sendSetRuleset } from "../../store/gameStore";
 import { hostSeatRows } from "../../store/hostView";
 import { PlayerTable } from "./PlayerTable";
 import PrivacyChip from "./PrivacyChip";
 
-// The roles the host can dial (villagers are the remainder). Order is the
-// stable display order.
-const EDITABLE_ROLES: { id: string; label: string }[] = [
-  { id: "mafia", label: "Mafia" },
-  { id: "detective", label: "Detective" },
-  { id: "angel", label: "Angel" },
-  { id: "suicide_bomber", label: "Suicide bomber" },
-  { id: "minion", label: "Minion" },
-];
-
 const SET_RULESET_DEBOUNCE_MS = 250;
-
-type Counts = Record<string, number>;
-
-function countsFromRuleset(roles: Record<string, number | "auto">): Counts {
-  const out: Counts = {};
-  for (const { id } of EDITABLE_ROLES) {
-    const v = roles[id];
-    out[id] = typeof v === "number" ? v : id === "mafia" ? 1 : 0;
-  }
-  return out;
-}
 
 // The wire ruleset: explicit editable counts + villager as the auto remainder,
 // plus the Spec 12 scenePhases toggle; every other field inherited from the
@@ -57,6 +54,14 @@ function rulesetFromCounts(counts: Counts, scenePhases: boolean): Ruleset {
       minion: counts.minion ?? 0,
     },
   };
+}
+
+// The all-auto ruleset broadcast by "Reset to suggested" — every house-six
+// role (including villager) reverts to "auto" so the engine/other clients
+// resolve via `recommendedRoleCounts` too. `scenePhases` is preserved by the
+// caller, never clobbered.
+function allAutoRuleset(scenePhases: boolean): Ruleset {
+  return { ...HOUSE_RULES, scenePhases };
 }
 
 function Stepper({
@@ -111,18 +116,31 @@ function RoleCountEditor({
   counts,
   villagers,
   playerCount,
+  modified,
   onChange,
+  onReset,
 }: {
   counts: Counts;
   villagers: number;
   playerCount: number;
+  modified: boolean;
   onChange: (id: string, next: number) => void;
+  onReset: () => void;
 }) {
-  const mafiaHint = autoMafiaCount(Math.max(playerCount, 1), "sqrt");
   return (
     <Card data-testid="role-count-editor" className="w-full bg-ink-3">
-      <CardHeader className="pb-2">
+      <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
         <CardTitle>Cast the case</CardTitle>
+        {modified && (
+          <button
+            type="button"
+            data-testid="reset-to-suggested"
+            onClick={onReset}
+            className="min-h-8 rounded-sm border border-frame px-2 py-1 text-[0.65rem] uppercase tracking-[0.1em] text-smoke hover:text-paper"
+          >
+            Reset to suggested
+          </button>
+        )}
       </CardHeader>
       <CardContent className="flex flex-col gap-2 pb-4">
         {EDITABLE_ROLES.map((r) => (
@@ -143,9 +161,9 @@ function RoleCountEditor({
           <span className="text-sm text-paper">Villagers</span>
           <span className="w-6 text-center tabular-nums text-smoke">{villagers}</span>
         </div>
-        <p className="mt-1 text-[0.7rem] text-smoke">
-          // Villagers fill the remainder. Suggested mafia for {playerCount || "—"} players:{" "}
-          {mafiaHint}. Consider a day timer for unattended play.
+        <p data-testid="role-count-hint" className="mt-1 text-[0.7rem] text-smoke">
+          // {suggestionHint(recommendedRoleCounts, playerCount)}. Villagers fill the remainder. Consider a day timer for
+          unattended play.
         </p>
       </CardContent>
     </Card>
@@ -166,10 +184,21 @@ export default function HostLobby({
   const rows = hostSeatRows(state);
   const playerCount = state.players.length;
 
+  // Spec 13: `modified` tracks whether the host has touched a stepper (or
+  // reconnected into an already-edited room) this session. While false, the
+  // displayed counts track `recommendedRoleCounts(playerCount)` live and
+  // nothing is broadcast — the engine's all-auto `HOUSE_RULES` resolves the
+  // same way server-side. Seeded true if the broadcast pending ruleset (a
+  // reconnecting host's own prior edits) isn't all-auto.
+  const [modified, setModified] = useState<boolean>(() => {
+    const roles = state.pendingRuleset?.roles;
+    return roles ? !isAllAuto(roles) : false;
+  });
   // Seed the editor from the broadcast pending ruleset (so a reconnecting host
-  // sees their own prior edits) falling back to the house ruleset.
+  // sees their own prior edits) falling back to the house ruleset. Only
+  // meaningful once `modified` — otherwise counts are derived live below.
   const [counts, setCounts] = useState<Counts>(() =>
-    countsFromRuleset(state.pendingRuleset?.roles ?? HOUSE_RULES.roles),
+    countsFromRuleset(recommendedRoleCounts, state.pendingRuleset?.roles ?? HOUSE_RULES.roles, playerCount),
   );
   // Spec 12: the sunrise/sunset toggle. Seeded from the broadcast pending
   // ruleset so a reconnecting host keeps their choice; defaults off.
@@ -177,9 +206,13 @@ export default function HostLobby({
     () => (state.pendingRuleset?.scenePhases as boolean | undefined) ?? HOUSE_RULES.scenePhases,
   );
 
-  const editableTotal = EDITABLE_ROLES.reduce((sum, r) => sum + (counts[r.id] ?? 0), 0);
+  const displayedCounts = modified ? counts : countsFromRecommendation(recommendedRoleCounts, playerCount);
+  const editableTotal = EDITABLE_ROLES.reduce((sum, r) => sum + (displayedCounts[r.id] ?? 0), 0);
   const villagers = Math.max(0, playerCount - editableTotal);
-  const ruleset = useMemo(() => rulesetFromCounts(counts, scenePhases), [counts, scenePhases]);
+  const ruleset = useMemo(
+    () => (modified ? rulesetFromCounts(counts, scenePhases) : allAutoRuleset(scenePhases)),
+    [modified, counts, scenePhases],
+  );
   const validation = validateRuleset(ruleset, playerCount);
   const canStart = playerCount >= 3 && validation.errors.length === 0;
   const startBlockedReason =
@@ -187,19 +220,33 @@ export default function HostLobby({
 
   // Debounced set_ruleset broadcast (Spec 06: debounced, excluded from
   // lastActivityAt server-side). Skip the very first render so we don't echo
-  // the seed back immediately.
+  // the seed back immediately. While untouched (`!modified`), skip broadcast
+  // entirely — the room started all-auto and stays all-auto server-side, no
+  // wire traffic needed for player-count-driven recompute.
   const firstRender = useRef(true);
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false;
       return;
     }
+    if (!modified) return;
     const t = setTimeout(() => sendSetRuleset(ruleset), SET_RULESET_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [ruleset]);
+  }, [modified, ruleset]);
 
   function handleCount(id: string, next: number) {
-    setCounts((prev) => ({ ...prev, [id]: Math.max(id === "mafia" ? 1 : 0, next) }));
+    // First edit freezes the live recommendation into explicit numbers.
+    setCounts((prev) => {
+      const base = modified ? prev : countsFromRecommendation(recommendedRoleCounts, playerCount);
+      return { ...base, [id]: Math.max(id === "mafia" ? 1 : 0, next) };
+    });
+    setModified(true);
+  }
+
+  function handleReset() {
+    setModified(false);
+    setCounts(countsFromRecommendation(recommendedRoleCounts, playerCount));
+    sendSetRuleset(allAutoRuleset(scenePhases));
   }
 
   return (
@@ -242,10 +289,12 @@ export default function HostLobby({
 
         <div className="flex flex-col gap-4">
           <RoleCountEditor
-            counts={counts}
+            counts={displayedCounts}
             villagers={villagers}
             playerCount={playerCount}
+            modified={modified}
             onChange={handleCount}
+            onReset={handleReset}
           />
           <button
             type="button"

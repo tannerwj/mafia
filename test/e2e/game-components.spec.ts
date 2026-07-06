@@ -26,13 +26,29 @@ async function joinAsPlayer(page: Page, roomCode: string, name: string) {
   await expect(page.getByTestId("player-list")).toContainText(name);
 }
 
+// Spec 13: `HOUSE_RULESET.roles` is now all-"auto" for the house six, so an
+// empty (or partial) `mafia:testRoles` override no longer reproduces the
+// pre-Spec-13 explicit shape — `materializeRoleCounts` inserts auto-resolved
+// keys in declaration order, which shifted (mafia now resolves first, ahead
+// of detective/angel/suicide_bomber/minion) and that insertion order feeds
+// `Object.entries(counts)` BEFORE the seeded shuffle in `machine.ts`, so
+// seed->assignment mappings silently changed. This legacy base pins the
+// pre-Spec-13 explicit shape (detective/angel/suicide_bomber/minion fixed,
+// mafia/villager auto) so `materializeRoleCounts`'s insertion order — and
+// therefore every seeded role map documented in this file — stays byte-stable.
+const LEGACY_EXPLICIT_ROLES_BASE = { detective: 1, angel: 1, suicide_bomber: 1, minion: 0 };
+
 async function startGameWithSeed(hostPage: Page, seed: number) {
-  await hostPage.evaluate((s) => {
-    sessionStorage.setItem("mafia:testSeed", String(s));
-    // Spec 11: empty role override -> Room sends the exact HOUSE_RULESET shape
-    // (not the new editor default), preserving the seed->assignment mapping.
-    sessionStorage.setItem("mafia:testRoles", "{}");
-  }, seed);
+  await hostPage.evaluate(
+    ({ s, base }) => {
+      sessionStorage.setItem("mafia:testSeed", String(s));
+      // Spec 11/13: the legacy explicit shape -> Room sends the pre-Spec-13
+      // HOUSE_RULESET wire shape (not the new all-auto default), preserving
+      // the seed->assignment mapping.
+      sessionStorage.setItem("mafia:testRoles", JSON.stringify(base));
+    },
+    { s: seed, base: LEGACY_EXPLICIT_ROLES_BASE },
+  );
   await hostPage.getByTestId("start-game").click();
 }
 
@@ -46,7 +62,7 @@ async function startGameWithSeedAndRoles(
       sessionStorage.setItem("mafia:testSeed", String(s));
       sessionStorage.setItem("mafia:testRoles", JSON.stringify(r));
     },
-    { s: seed, r: roles },
+    { s: seed, r: { ...LEGACY_EXPLICIT_ROLES_BASE, ...roles } },
   );
   await hostPage.getByTestId("start-game").click();
 }
@@ -301,13 +317,13 @@ test("hidden-mode tally: no denominator, no per-candidate counts, no other playe
 });
 
 // Seed 1 with a role override ({mafia:1, villager:1, minion:1,
-// suicide_bomber:0}, detective/angel:1 kept from the house-rules base) ->
-// Alice:minion, Bob:detective, Carol:villager, Dave:mafia, Erin:angel
-// (verified against startGame with this exact roles object, summing to 5).
-// `minion: 0` is hardcoded in the real `HOUSE_RULESET` the client sends, so
-// `mafia:testRoles` — a test-only sessionStorage hook mirroring
+// suicide_bomber:0} merged onto LEGACY_EXPLICIT_ROLES_BASE's detective:1/
+// angel:1) -> Alice:minion, Bob:detective, Carol:villager, Dave:mafia,
+// Erin:angel (verified against startGame with this exact roles object,
+// summing to 5). Spec 13's live pre-fill only reaches 1 minion at 16+
+// players, so `mafia:testRoles` — a test-only sessionStorage hook mirroring
 // `mafia:testSeed`'s gating — is required to reach a minion viewer at all
-// through the real app.
+// through the real app at this table size.
 test("you.mafiaRoster (Spec 02 v2.6): a minion context renders the mafia's name, a villager context never does", async ({
   browser,
 }) => {

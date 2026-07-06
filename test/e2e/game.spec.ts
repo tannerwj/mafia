@@ -8,9 +8,11 @@ import { expect, test, type Page } from "@playwright/test";
 // against `startGame(players, HOUSE_RULES, seed, 0)` before being pinned
 // here; see docs/specs/04-implementation-notes.md).
 //
-// The client's "Start game" trigger (Lobby.tsx, host-only) always sends
-// `HOUSE_RULES`'s exact shape (src/client/lib/houseRuleset.ts's
-// `HOUSE_RULESET` mirrors it) — for 5 players that formula
+// `startGameWithSeed` stashes `LEGACY_EXPLICIT_ROLES_BASE` (below) as the
+// `mafia:testRoles` override, so Room.tsx sends the pre-Spec-13 explicit
+// wire shape (mafia auto, detective/angel/suicide_bomber fixed at 1, minion
+// fixed at 0, villager auto) regardless of what `HOUSE_RULESET` itself
+// resolves to today — for 5 players that formula
 // (`autoMafiaCount(5, "sqrt") = round(sqrt(5)) = 2`) always yields exactly
 // 2 mafia, 1 detective, 1 angel, 1 suicide_bomber, 0 villagers. Every
 // scenario below accounts for 2 mafia, not 1 (a solo-mafia 5-player game is
@@ -39,16 +41,32 @@ async function joinAsPlayer(page: Page, roomCode: string, name: string) {
   await expect(page.getByTestId("player-list")).toContainText(name);
 }
 
+// Spec 13: `HOUSE_RULESET.roles` is now all-"auto" for the house six, so an
+// empty `mafia:testRoles` override no longer reproduces the pre-Spec-13
+// explicit shape — `materializeRoleCounts` inserts auto-resolved keys in
+// declaration order, which shifted (mafia now resolves first, ahead of
+// detective/angel/suicide_bomber/minion) and that insertion order feeds
+// `Object.entries(counts)` BEFORE the seeded shuffle in `machine.ts`, so
+// seed->assignment mappings silently changed. This legacy base pins the
+// pre-Spec-13 explicit shape (detective/angel/suicide_bomber/minion fixed,
+// mafia/villager auto) so `materializeRoleCounts`'s insertion order — and
+// therefore every scenario's documented seed->role mapping below — stays
+// byte-stable.
+const LEGACY_EXPLICIT_ROLES_BASE = { detective: 1, angel: 1, suicide_bomber: 1, minion: 0 };
+
 async function startGameWithSeed(hostPage: Page, seed: number) {
-  await hostPage.evaluate((s) => {
-    sessionStorage.setItem("mafia:testSeed", String(s));
-    // Spec 11: the host lobby now has an editable role-count editor whose
-    // default differs from HOUSE_RULES. Stash an empty role override so
-    // Room.handleStartGame sends the exact HOUSE_RULESET shape (mafia auto,
-    // det/angel/bomber 1, villager auto) — keeping every scenario's
-    // seed->role-assignment mapping identical to before the editor existed.
-    sessionStorage.setItem("mafia:testRoles", "{}");
-  }, seed);
+  await hostPage.evaluate(
+    ({ s, base }) => {
+      sessionStorage.setItem("mafia:testSeed", String(s));
+      // Spec 11/13: the legacy explicit shape -> Room.handleStartGame sends
+      // the pre-Spec-13 HOUSE_RULESET wire shape (mafia auto, det/angel/bomber
+      // 1, minion 0, villager auto) — keeping every scenario's
+      // seed->role-assignment mapping identical to before Spec 13's all-auto
+      // house rules.
+      sessionStorage.setItem("mafia:testRoles", JSON.stringify(base));
+    },
+    { s: seed, base: LEGACY_EXPLICIT_ROLES_BASE },
+  );
   await hostPage.getByTestId("start-game").click();
 }
 

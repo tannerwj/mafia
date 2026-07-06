@@ -35,10 +35,10 @@ export const HOUSE_RULES: Ruleset = {
   roles: {
     mafia: "auto",
     villager: "auto",
-    detective: 1,
-    angel: 1,
-    suicide_bomber: 1,
-    minion: 0,
+    detective: "auto",
+    angel: "auto",
+    suicide_bomber: "auto",
+    minion: "auto",
   },
   mafiaCountFormula: "sqrt",
   firstNightKill: true,
@@ -58,6 +58,27 @@ export function autoMafiaCount(playerCount: number, formula: "sqrt" | "quarter")
   return Math.max(1, Math.round(formula === "sqrt" ? Math.sqrt(playerCount) : playerCount / 4));
 }
 
+// Spec 13: the scaled recommendation for the house six, confirmed with the
+// product owner — do not change these numbers without a new spec. Small
+// tables (n < 6) use the explicit cases below (today's fixed defaults are
+// invalid there); n >= 6 uses the formula. `villager` is always the
+// remainder, resolved by the caller (`materializeRoleCounts`), never here.
+export function recommendedRoleCounts(playerCount: number): Record<RoleId, number> {
+  const n = Math.max(0, playerCount);
+  if (n <= 2) return { mafia: 1, detective: 0, angel: 0, suicide_bomber: 0, minion: 0, villager: Math.max(0, n - 1) };
+  if (n === 3) return { mafia: 1, detective: 1, angel: 0, suicide_bomber: 0, minion: 0, villager: 1 };
+  if (n === 4) return { mafia: 1, detective: 1, angel: 1, suicide_bomber: 0, minion: 0, villager: 1 };
+  if (n === 5) return { mafia: 2, detective: 1, angel: 1, suicide_bomber: 1, minion: 0, villager: 0 };
+  const mafia = Math.max(1, Math.max(Math.round(Math.sqrt(n)), Math.round(n / 4)));
+  const minion = n >= 16 ? 1 : 0;
+  const detective = n >= 16 ? 3 : n >= 8 ? 2 : 1;
+  const angel = n >= 12 ? 2 : 1;
+  const suicide_bomber = 1;
+  const used = mafia + minion + detective + angel + suicide_bomber;
+  const villager = Math.max(0, n - used);
+  return { mafia, detective, angel, suicide_bomber, minion, villager };
+}
+
 export function materializeRoleCounts(ruleset: Ruleset, playerCount: number): Record<RoleId, number> {
   const counts: Record<RoleId, number> = {};
   let used = 0;
@@ -69,15 +90,16 @@ export function materializeRoleCounts(ruleset: Ruleset, playerCount: number): Re
       used += count;
     }
   }
+  const recommended = recommendedRoleCounts(playerCount);
   for (const roleId of autoRoles) {
-    if (roleId === "mafia") {
-      const count = autoMafiaCount(playerCount, ruleset.mafiaCountFormula);
+    if (roleId !== "villager") {
+      const count = recommended[roleId] ?? 0;
       counts[roleId] = count;
       used += count;
     }
   }
   for (const roleId of autoRoles) {
-    if (roleId !== "mafia") {
+    if (roleId === "villager") {
       counts[roleId] = Math.max(0, playerCount - used);
       used += counts[roleId]!;
     }

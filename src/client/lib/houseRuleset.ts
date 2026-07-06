@@ -11,10 +11,10 @@ export const HOUSE_RULESET = {
   roles: {
     mafia: "auto",
     villager: "auto",
-    detective: 1,
-    angel: 1,
-    suicide_bomber: 1,
-    minion: 0,
+    detective: "auto",
+    angel: "auto",
+    suicide_bomber: "auto",
+    minion: "auto",
   },
   mafiaCountFormula: "sqrt",
   firstNightKill: true,
@@ -42,14 +42,13 @@ export function testSeedOverride(): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-/** Test-only hook, same shape/gating as `testSeedOverride`: `HOUSE_RULESET`
- * hardcodes `minion: 0` (no host UI exists yet to configure roles — Spec
- * 06's job), so a minion is unreachable through the real client flow. A
- * Playwright test can stash a JSON-encoded role-count patch (e.g.
- * `{"minion":1,"villager":0}`) to reach a minion viewer for the
- * `you.mafiaRoster` assertion. The server re-validates whatever ruleset
- * arrives regardless (`invalid_ruleset` on the `error` channel) — this is
- * a wire payload override, not new game logic. */
+/** Test-only hook, same shape/gating as `testSeedOverride`: the recommended
+ * counts (Spec 13) only reach 1 minion at 16+ players, so a minion is hard to
+ * reach at small Playwright table sizes through the real client flow. A test
+ * can stash a JSON-encoded role-count patch (e.g. `{"minion":1,"villager":0}`)
+ * to reach a minion viewer for the `you.mafiaRoster` assertion. The server
+ * re-validates whatever ruleset arrives regardless (`invalid_ruleset` on the
+ * `error` channel) — this is a wire payload override, not new game logic. */
 export function testRolesOverride(): Partial<typeof HOUSE_RULESET.roles> | undefined {
   const raw = sessionStorage.getItem("mafia:testRoles");
   if (!raw) return undefined;

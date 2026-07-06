@@ -2,28 +2,32 @@ import type { ClientRoomState } from "../../shared/protocol";
 import { Button } from "../components/ui/button";
 import { FileCard } from "../components/ui/dossier";
 import HelpButton from "../components/HelpButton";
+import { recommendedRoleCounts } from "../../engine";
 import { roleCopyFor } from "../lib/roleCopy";
 
 // Spec 11: the roster the host has dialed in, counts only (never assignments).
 // Villagers are the auto remainder, computed against the current player count.
+// Spec 13: "auto" roles (a fresh room broadcasts all-auto) resolve via the
+// same `recommendedRoleCounts` the engine uses server-side.
 const ROSTER_ROLE_ORDER = ["mafia", "detective", "angel", "suicide_bomber", "minion"];
 
 function PendingRosterCard({ state }: { state: ClientRoomState }) {
   const roles = state.pendingRuleset?.roles;
   if (!roles) return null;
-  const explicit = ROSTER_ROLE_ORDER.map((id) => {
+  const recommended = recommendedRoleCounts(state.players.length);
+  const resolved = ROSTER_ROLE_ORDER.map((id) => {
     const v = roles[id];
-    return { id, count: typeof v === "number" ? v : 0 };
+    return { id, count: typeof v === "number" ? v : (recommended[id] ?? 0) };
   }).filter((r) => r.count > 0);
-  const explicitTotal = explicit.reduce((sum, r) => sum + r.count, 0);
+  const resolvedTotal = resolved.reduce((sum, r) => sum + r.count, 0);
   const villagerCount =
     roles.villager === "auto"
-      ? Math.max(0, state.players.length - explicitTotal)
+      ? Math.max(0, state.players.length - resolvedTotal)
       : typeof roles.villager === "number"
         ? roles.villager
         : 0;
   const entries = [
-    ...explicit.map((r) => ({ name: roleCopyFor(r.id).displayName, count: r.count })),
+    ...resolved.map((r) => ({ name: roleCopyFor(r.id).displayName, count: r.count })),
     ...(villagerCount > 0 ? [{ name: "Villager", count: villagerCount }] : []),
   ];
   return (

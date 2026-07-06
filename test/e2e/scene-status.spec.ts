@@ -9,11 +9,17 @@ import { expect, test, type Page } from "@playwright/test";
 // scenePhases is enabled through the REAL host lobby toggle (`scene-phases-
 // toggle`), so these tests deliberately do NOT stash a `mafia:testRoles`
 // override — that override forces the HOUSE_RULESET shape (scenePhases:false).
-// Instead they let the host lobby's own editor ruleset (scenePhases:true, and
-// its editor role mix: 1 mafia / 1 detective / 1 angel / 1 bomber / 1 villager
-// for 5 players) flow through. Seed 42 under THAT mix deals:
+// Instead they let the host lobby's own editor ruleset (scenePhases:true) flow
+// through. Spec 13: the editor's live pre-fill at 5 players is now 2 mafia (
+// `recommendedRoleCounts(5)`), not 1 — this test's choreography wants a SOLE
+// mafia (one kill, no consensus round), so `startScenePhasesGame` dials the
+// mafia stepper down by one click before starting. That first edit freezes
+// the then-current recommendation into explicit numbers (1 mafia, 1
+// detective, 1 angel, 1 bomber, 0 minion, villager absorbs the remainder = 1)
+// — the same 1/1/1/1/0/1 mix this test relied on before Spec 13, so seed 42
+// deals the identical mapping:
 //   Alice:mafia, Bob:villager, Carol:angel, Dave:detective, Erin:suicide_bomber
-// (verified against startGame with the editor ruleset).
+// (verified against startGame with this exact ruleset).
 
 async function createRoomAsHost(page: Page): Promise<string> {
   await page.goto("/");
@@ -33,14 +39,29 @@ async function joinAsPlayer(page: Page, roomCode: string, name: string) {
   await expect(page.getByTestId("player-list")).toContainText(name);
 }
 
-// Enable scenePhases via the real toggle, set the seed, then start — WITHOUT a
-// testRoles override, so the editor's scenePhases:true ruleset is what's sent.
+// Spec 13: `HOUSE_RULESET.roles` is now all-"auto" for the house six; an
+// empty `mafia:testRoles` override no longer reproduces the pre-Spec-13
+// explicit shape's `materializeRoleCounts` insertion order (which feeds
+// `Object.entries(counts)` before the seeded shuffle in `machine.ts`), so
+// seed->assignment mappings would silently shift. This legacy base pins the
+// pre-Spec-13 explicit shape (detective/angel/suicide_bomber/minion fixed,
+// mafia/villager auto) so the seed 42 -> role mappings documented below stay
+// byte-stable. Used only by the two non-scenePhases tests in this file (the
+// scenePhases test drives the real editor instead — see
+// `startScenePhasesGame`).
+const LEGACY_EXPLICIT_ROLES_BASE = { detective: 1, angel: 1, suicide_bomber: 1, minion: 0 };
+
+// Enable scenePhases via the real toggle, dial mafia down to 1 (Spec 13's
+// 5-player pre-fill is 2), set the seed, then start — WITHOUT a testRoles
+// override, so the editor's own ruleset is what's sent.
 async function startScenePhasesGame(hostPage: Page, seed: number) {
   await hostPage.evaluate((s) => sessionStorage.setItem("mafia:testSeed", String(s)), seed);
   const toggle = hostPage.getByTestId("scene-phases-toggle");
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await hostPage.getByTestId("role-count-mafia-dec").click();
+  await expect(hostPage.getByTestId("role-count-mafia-value")).toHaveText("1");
   await hostPage.getByTestId("start-game").click();
 }
 
@@ -173,12 +194,12 @@ test.describe("Spec 12: all-player game status (graveyard + roles remaining)", (
     await joinAsPlayer(dave!, roomCode, "Dave");
     await joinAsPlayer(erin!, roomCode, "Erin");
 
-    // No scene phases here — plain game (testRoles empty -> HOUSE mix: seed 42
-    // = Alice:detective, Bob:mafia, Carol:bomber, Dave:angel, Erin:mafia).
-    await hostPage.evaluate(() => {
+    // No scene phases here — plain game (legacy explicit base -> HOUSE mix:
+    // seed 42 = Alice:detective, Bob:mafia, Carol:bomber, Dave:angel, Erin:mafia).
+    await hostPage.evaluate((base) => {
       sessionStorage.setItem("mafia:testSeed", "42");
-      sessionStorage.setItem("mafia:testRoles", "{}");
-    });
+      sessionStorage.setItem("mafia:testRoles", JSON.stringify(base));
+    }, LEGACY_EXPLICIT_ROLES_BASE);
     await hostPage.getByTestId("start-game").click();
 
     await waitForPhase(alice!, "night");
@@ -227,12 +248,12 @@ test.describe("Spec 12: host narrator board", () => {
     await joinAsPlayer(dave!, roomCode, "Dave");
     await joinAsPlayer(erin!, roomCode, "Erin");
 
-    // HOUSE mix seed 42: Alice:detective, Bob:mafia, Carol:bomber, Dave:angel,
-    // Erin:mafia.
-    await hostPage.evaluate(() => {
+    // HOUSE mix seed 42 (legacy explicit base): Alice:detective, Bob:mafia,
+    // Carol:bomber, Dave:angel, Erin:mafia.
+    await hostPage.evaluate((base) => {
       sessionStorage.setItem("mafia:testSeed", "42");
-      sessionStorage.setItem("mafia:testRoles", "{}");
-    });
+      sessionStorage.setItem("mafia:testRoles", JSON.stringify(base));
+    }, LEGACY_EXPLICIT_ROLES_BASE);
     await hostPage.getByTestId("start-game").click();
 
     await waitForPhase(alice!, "night");

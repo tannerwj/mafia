@@ -352,3 +352,35 @@ history above, and `CLAUDE.md` (operating rules + "process rules learned").
 - `.dev.vars` and `.claude/worktrees/` are gitignored.
 - Reserved-but-unexercised: NAR bands 100 (control/redirect) & 450 (reactive)
   for future roles.
+
+## 2026-07-06 — SPEC 13: scaled role recommendation (build session 2)
+- Tanner task: default role distribution must scale EVERY role with player
+  count, not just mafia. Design confirmed with Tanner via two Q&A rounds
+  (he pushed power roles earlier + kept mafia strong at big tables):
+  mafia = max(round(√n), round(n/4)); minion 1 @16+; detective 2 @8+ /
+  3 @16+; angel 2 @12+; bomber 1; villagers = remainder. Small-N explicit
+  (3: 1/1/0/0/0/1 · 4: 1/1/1/0/0/1 · 5: 2/1/1/1/0/0). Reference table
+  pinned in test/engine/recommendation.test.ts; spec docs/specs/13-*.md.
+- Audit finding fixed en route: the lobby pre-filled 1 mafia at ANY size
+  (hardcoded "auto"→1 fallback; √n was hint-text only) and untouched house
+  rules were invalid at N=3-4. Now: `recommendedRoleCounts(n)` in engine;
+  HOUSE_RULES all-auto; lobby live-tracks the recommendation as players
+  join until the host touches a stepper (then freezes explicit), with a
+  "Reset to suggested" button. Still a recommendation only — steppers +
+  validateRuleset remain sovereign.
+- Coordination note (worked as designed): amendment message crossed with
+  the builder finishing v1 thresholds — caught by artifact check (grep'd
+  ruleset.ts, not wrapper chatter), re-cut to v2 surgically.
+- E2E: 22/41 failed on first gate, ALL two known classes, no product bugs:
+  (1) seeded role maps shifted because startGame flattens
+  Object.entries(counts) in insertion order pre-shuffle and the all-auto
+  wire shape changes key order — fixed by pinning tests' testRoles stash
+  to the legacy explicit shape; (2) editor-driven tests encoded the old
+  buggy 1-mafia pre-fill. 3-player gate test rewritten to assert the new
+  win (Start enables at 3 with zero edits + overflow/reset round-trip).
+- KNOWN FRAGILITY (deferred, do not "fix" casually): role assignment order
+  depends on JS object key insertion order of the wire ruleset. Canonical
+  pre-shuffle sort is the root-cause fix but invalidates every seeded E2E
+  role map — do it only in a dedicated pass that regenerates all maps.
+- Verified fresh by orchestrator: typecheck clean; engine 170 / client 20 /
+  server 49; Playwright 41/41 (3.3m, workers=1, clean state).

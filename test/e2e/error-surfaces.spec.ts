@@ -139,9 +139,10 @@ test("joining after the game has started shows room-error", async ({
   const hostPage = await hostCtx.newPage();
   const roomCode = await createRoomAsHost(hostPage);
 
-  // Spec 11: the lobby role-count editor's default roster is valid at 5
-  // players (1 mafia, 1 detective, 1 angel, 1 bomber, 1 villager), so "Start
-  // game" is reachable without editing — join 5 and start straight away.
+  // Spec 11/13: the lobby role-count editor's live pre-fill is valid at any
+  // N >= 3 (Spec 13's `recommendedRoleCounts`; at 5 players that's 2 mafia,
+  // 1 detective, 1 angel, 1 bomber, 0 villager), so "Start game" is reachable
+  // without editing — join 5 and start straight away.
   const playerCtxs = await Promise.all(
     Array.from({ length: 5 }, () => browser.newContext()),
   );

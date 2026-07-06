@@ -25,12 +25,26 @@ async function joinAsPlayer(page: Page, roomCode: string, name: string) {
   await expect(page.getByTestId("player-list")).toContainText(name);
 }
 
+// Spec 13: `HOUSE_RULESET.roles` is now all-"auto" for the house six; an
+// empty `mafia:testRoles` override no longer reproduces the pre-Spec-13
+// explicit shape's `materializeRoleCounts` insertion order (which feeds
+// `Object.entries(counts)` before the seeded shuffle in `machine.ts`), so
+// seed->assignment mappings would silently shift. This legacy base pins the
+// pre-Spec-13 explicit shape (detective/angel/suicide_bomber/minion fixed,
+// mafia/villager auto) so the seed 42 -> role mapping documented above stays
+// byte-stable.
+const LEGACY_EXPLICIT_ROLES_BASE = { detective: 1, angel: 1, suicide_bomber: 1, minion: 0 };
+
 async function startGameWithSeed(hostPage: Page, seed: number) {
-  await hostPage.evaluate((s) => {
-    sessionStorage.setItem("mafia:testSeed", String(s));
-    // Spec 11: empty role override -> Room sends the exact HOUSE_RULESET shape.
-    sessionStorage.setItem("mafia:testRoles", "{}");
-  }, seed);
+  await hostPage.evaluate(
+    ({ s, base }) => {
+      sessionStorage.setItem("mafia:testSeed", String(s));
+      // Spec 11/13: the legacy explicit shape -> Room sends the pre-Spec-13
+      // HOUSE_RULESET wire shape.
+      sessionStorage.setItem("mafia:testRoles", JSON.stringify(base));
+    },
+    { s: seed, base: LEGACY_EXPLICIT_ROLES_BASE },
+  );
   await hostPage.getByTestId("start-game").click();
 }
 

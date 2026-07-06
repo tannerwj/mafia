@@ -26,14 +26,27 @@ async function joinAsPlayer(page: Page, roomCode: string, name: string) {
   await expect(page.getByTestId("player-list")).toContainText(name);
 }
 
+// Spec 13: `HOUSE_RULESET.roles` is now all-"auto" for the house six; an
+// empty `mafia:testRoles` override no longer reproduces the pre-Spec-13
+// explicit shape's `materializeRoleCounts` insertion order (which feeds
+// `Object.entries(counts)` before the seeded shuffle in `machine.ts`), so
+// seed->assignment mappings would silently shift. This legacy base pins the
+// pre-Spec-13 explicit shape (detective/angel/suicide_bomber/minion fixed,
+// mafia/villager auto) so seed 42's documented mapping (Alice:detective,
+// Bob:mafia, Carol:bomber, Dave:angel, Erin:mafia) stays byte-stable.
+const LEGACY_EXPLICIT_ROLES_BASE = { detective: 1, angel: 1, suicide_bomber: 1, minion: 0 };
+
 async function startGameWithSeed(hostPage: Page, seed: number) {
-  await hostPage.evaluate((s) => {
-    sessionStorage.setItem("mafia:testSeed", String(s));
-    // Spec 11: empty role override -> Room sends the exact HOUSE_RULESET shape,
-    // preserving seed 42's assignment (Alice:detective, Bob:mafia,
-    // Carol:bomber, Dave:angel, Erin:mafia).
-    sessionStorage.setItem("mafia:testRoles", "{}");
-  }, seed);
+  await hostPage.evaluate(
+    ({ s, base }) => {
+      sessionStorage.setItem("mafia:testSeed", String(s));
+      // Spec 11/13: the legacy explicit shape -> Room sends the pre-Spec-13
+      // HOUSE_RULESET wire shape, preserving seed 42's assignment
+      // (Alice:detective, Bob:mafia, Carol:bomber, Dave:angel, Erin:mafia).
+      sessionStorage.setItem("mafia:testRoles", JSON.stringify(base));
+    },
+    { s: seed, base: LEGACY_EXPLICIT_ROLES_BASE },
+  );
   await hostPage.getByTestId("start-game").click();
 }
 
@@ -326,15 +339,19 @@ test.describe("share link degrades gracefully when clipboard is denied", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Spec 11 Feature 4: the role-count editor + live validation gate. Below 3
-// players Start is always disabled. The editor's default roster (1 mafia,
-// 1 detective, 1 angel, 1 bomber = 4 roles) does NOT fit 3 players, so Start
-// stays disabled with the mismatch reason until the host dials the extra
-// power roles down to reach a legal 1 mafia + 2 villagers — the small-game
-// setup this feature unlocks.
+// Spec 11 Feature 4 + Spec 13 scaled recommendation: the role-count editor's
+// live validation gate. Below 3 players Start is always disabled. Spec 13
+// makes the untouched editor track `recommendedRoleCounts(playerCount)` live
+// as players join — at N=3 that's 1 mafia / 1 detective / 1 villager, which
+// is already legal, so Start enables the moment the 3rd player joins with NO
+// host edits at all (the headline UX win this spec shipped; pre-Spec-13 the
+// fixed default of mafia+detective+angel+bomber=4 roles overflowed 3 seats
+// and stayed disabled until the host dialed three steppers down by hand).
+// This test also covers dialing INTO an illegal state and "Reset to
+// suggested" recovering from it.
 // ---------------------------------------------------------------------------
-test.describe("start gate + role-count editor (Spec 11 Feature 4)", () => {
-  test("editor unlocks a 3-player game once the roster is dialed to fit", async ({
+test.describe("start gate + role-count editor (Spec 11 Feature 4, Spec 13 live pre-fill)", () => {
+  test("3rd player joining enables Start immediately via the live pre-fill; overflow + reset round-trips", async ({
     browser,
   }) => {
     const hostCtx = await browser.newContext();
@@ -353,29 +370,47 @@ test.describe("start gate + role-count editor (Spec 11 Feature 4)", () => {
     await expect(hostPage.getByTestId("host-player-table")).toContainText("Bob");
     await expect(startBtn).toBeDisabled();
 
-    // Third player joins. The default roster (mafia+det+angel+bomber = 4
-    // roles) is too many for 3 seats -> Start still disabled (role mismatch).
+    // Third player joins. Spec 13: the untouched editor live-tracks
+    // recommendedRoleCounts(3) = 1 mafia / 1 detective / 0 angel / 0 bomber /
+    // 0 minion / 1 villager (sums to 3, already legal) -> Start enables with
+    // NO host edits.
     const carolCtx = await browser.newContext();
     ctxs.push(carolCtx);
     await joinAsPlayer(await carolCtx.newPage(), roomCode, "Carol");
     await expect(hostPage.getByTestId("host-player-table")).toContainText("Carol");
-    await expect(startBtn).toBeDisabled();
-
-    // Dial the three extra power roles to 0 -> 1 mafia + 2 villagers = 3.
-    // The editor's live validation then enables Start.
-    for (const role of ["detective", "angel", "suicide_bomber"]) {
-      await hostPage.getByTestId(`role-count-${role}-dec`).click();
-    }
-    await expect(hostPage.getByTestId("role-count-villager")).toHaveAttribute(
-      "data-count",
-      "2",
-    );
+    await expect(hostPage.getByTestId("role-count-mafia-value")).toHaveText("1");
+    await expect(hostPage.getByTestId("role-count-detective-value")).toHaveText("1");
+    await expect(hostPage.getByTestId("role-count-villager")).toHaveAttribute("data-count", "1");
     await expect(startBtn).toBeEnabled();
     await expect(startBtn).toHaveText("Start game");
 
-    // Players see the roster (counts only) via pendingRuleset.
+    // Players see the live-tracked roster (counts only) via pendingRuleset —
+    // even though the host hasn't touched a stepper, the room already
+    // broadcasts the resolved all-auto counts.
     const carolPage = (await carolCtx.pages())[0]!;
     await expect(carolPage.getByTestId("pending-ruleset-summary")).toContainText("Villager");
+
+    // Dial detective up by 2 (1 -> 3): the first edit freezes the roster and
+    // starts broadcasting; 1 mafia + 3 detective + 0 angel + 0 bomber + 0
+    // minion = 4 roles for 3 seats -> illegal, Start disabled with the
+    // mismatch reason, and "Reset to suggested" appears (only shown once
+    // modified).
+    await hostPage.getByTestId("role-count-detective-inc").click();
+    await hostPage.getByTestId("role-count-detective-inc").click();
+    await expect(hostPage.getByTestId("role-count-detective-value")).toHaveText("3");
+    await expect(startBtn).toBeDisabled();
+    await expect(startBtn).toHaveText("Role counts must equal player count.");
+    const resetBtn = hostPage.getByTestId("reset-to-suggested");
+    await expect(resetBtn).toBeVisible();
+
+    // Reset to suggested -> back to the live pre-fill (1 mafia / 1 detective /
+    // 1 villager), Start re-enables, and the reset control disappears again
+    // (no longer "modified").
+    await resetBtn.click();
+    await expect(hostPage.getByTestId("role-count-detective-value")).toHaveText("1");
+    await expect(hostPage.getByTestId("role-count-villager")).toHaveAttribute("data-count", "1");
+    await expect(startBtn).toBeEnabled();
+    await expect(resetBtn).toHaveCount(0);
 
     await hostCtx.close();
     for (const ctx of ctxs) await ctx.close();
