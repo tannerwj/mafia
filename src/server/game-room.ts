@@ -13,6 +13,7 @@ import {
 } from "../shared/protocol";
 import {
   applyCommand,
+  HOUSE_RULES,
   projectFor,
   startGame,
   validateRuleset,
@@ -66,6 +67,9 @@ const PLAYERS_KEY = "players";
 const PENDING_AUTH_KEY = "pendingAuth";
 const GAME_KEY = "game";
 const GAME_DEADLINE_KEY = "gameDeadlineAt";
+// Spec 06 D1 / Spec 11: the host's pending lobby ruleset (role counts).
+// Defaulted to HOUSE_RULES at claim time; overwritten by `set_ruleset`.
+const PENDING_RULESET_KEY = "pendingRuleset";
 
 const AUTH_REAP_MS = 30_000;
 const EMPTY_LOBBY_TTL_MS = 60 * 60 * 1000; // 1h
@@ -185,6 +189,7 @@ export class GameRoom extends DurableObject<Env> {
     };
     await this.ctx.storage.put(ROOM_KEY, room);
     await this.ctx.storage.put(PLAYERS_KEY, [] as PlayerRecord[]);
+    await this.ctx.storage.put(PENDING_RULESET_KEY, HOUSE_RULES);
     await this.scheduleNextAlarm();
     return Response.json({ status: "claimed", hostKey });
   }
@@ -280,6 +285,31 @@ export class GameRoom extends DurableObject<Env> {
           playerId,
           now: Date.now(),
         }));
+        return;
+      case "confirm_vote":
+        await this.handleGameCommand(ws, attachment, (playerId) => ({
+          type: "confirmVote",
+          playerId,
+          now: Date.now(),
+        }));
+        return;
+      case "unconfirm_vote":
+        await this.handleGameCommand(ws, attachment, (playerId) => ({
+          type: "unconfirmVote",
+          playerId,
+          now: Date.now(),
+        }));
+        return;
+      case "acknowledge":
+        await this.handleGameCommand(ws, attachment, (playerId) => ({
+          type: "acknowledge",
+          playerId,
+          gen: parsed.gen,
+          now: Date.now(),
+        }));
+        return;
+      case "set_ruleset":
+        await this.handleSetRuleset(ws, attachment, parsed);
         return;
       case "lock_action":
         await this.handleGameCommand(ws, attachment, (playerId) => ({
@@ -592,6 +622,41 @@ export class GameRoom extends DurableObject<Env> {
     await this.applyGameResult(result, null, room);
   }
 
+  /** Spec 06 D1 / Spec 11. Host-only, lobby-only: store the pending lobby
+   * ruleset and broadcast it (players see the roster via
+   * `ClientRoomState.pendingRuleset`). Deliberately does NOT touch
+   * `lastActivityAt` (`skipActivity: true`) — idle role-count editing must
+   * not keep an otherwise-empty room alive forever (Spec 06 pin). Rejected
+   * (not errored) for non-host / non-lobby, consistent with other host
+   * lifecycle commands. Invalid JSON shape is rejected `invalid_ruleset`;
+   * the authoritative validation still happens at `start_game`. */
+  private async handleSetRuleset(
+    ws: WebSocket,
+    attachment: Attachment,
+    msg: Extract<ClientMessage, { type: "set_ruleset" }>,
+  ): Promise<void> {
+    if (attachment.kind !== "host") {
+      this.sendRejection(ws, "not_host");
+      return;
+    }
+    const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
+    if (!room || room.phase !== "lobby") {
+      this.sendRejection(ws, "not_lobby");
+      return;
+    }
+    const ruleset = msg.ruleset as Ruleset;
+    if (
+      typeof ruleset !== "object" ||
+      ruleset === null ||
+      typeof (ruleset as { roles?: unknown }).roles !== "object"
+    ) {
+      this.sendRejection(ws, "invalid_ruleset");
+      return;
+    }
+    await this.ctx.storage.put(PENDING_RULESET_KEY, ruleset);
+    await this.touchAndBroadcast({ skipActivity: true });
+  }
+
   /** Player-issued in-game commands (`submitAction`/`castVote`/
    * `retractVote`). Host sockets have no `playerId` and cannot issue these. */
   private async handleGameCommand(
@@ -898,6 +963,13 @@ export class GameRoom extends DurableObject<Env> {
         )
       : null;
 
+    // Spec 06 D1 / Spec 11: broadcast the pending ruleset only while in the
+    // lobby (roster preview) — once a game is running the chosen ruleset lives
+    // in `game`, so this is null to avoid a stale duplicate.
+    const pendingRuleset = game
+      ? null
+      : ((await this.ctx.storage.get<Ruleset>(PENDING_RULESET_KEY)) ?? null);
+
     return {
       roomCode: room.code,
       phase: game ? game.phase : "lobby",
@@ -905,6 +977,7 @@ export class GameRoom extends DurableObject<Env> {
       hostConnected,
       createdAt: room.createdAt,
       game: gameView,
+      pendingRuleset: pendingRuleset as ClientRoomState["pendingRuleset"],
     };
   }
 

@@ -2,6 +2,43 @@ import type { ClientRoomState } from "../../shared/protocol";
 import { Button } from "../components/ui/button";
 import { FileCard } from "../components/ui/dossier";
 import HelpButton from "../components/HelpButton";
+import { roleCopyFor } from "../lib/roleCopy";
+
+// Spec 11: the roster the host has dialed in, counts only (never assignments).
+// Villagers are the auto remainder, computed against the current player count.
+const ROSTER_ROLE_ORDER = ["mafia", "detective", "angel", "suicide_bomber", "minion"];
+
+function PendingRosterCard({ state }: { state: ClientRoomState }) {
+  const roles = state.pendingRuleset?.roles;
+  if (!roles) return null;
+  const explicit = ROSTER_ROLE_ORDER.map((id) => {
+    const v = roles[id];
+    return { id, count: typeof v === "number" ? v : 0 };
+  }).filter((r) => r.count > 0);
+  const explicitTotal = explicit.reduce((sum, r) => sum + r.count, 0);
+  const villagerCount =
+    roles.villager === "auto"
+      ? Math.max(0, state.players.length - explicitTotal)
+      : typeof roles.villager === "number"
+        ? roles.villager
+        : 0;
+  const entries = [
+    ...explicit.map((r) => ({ name: roleCopyFor(r.id).displayName, count: r.count })),
+    ...(villagerCount > 0 ? [{ name: "Villager", count: villagerCount }] : []),
+  ];
+  return (
+    <FileCard tab="The cast" className="w-full max-w-sm p-3">
+      <ul data-testid="pending-ruleset-summary" className="flex flex-col gap-1 text-sm text-paper/80">
+        {entries.map((e) => (
+          <li key={e.name} className="flex items-center justify-between">
+            <span>{e.name}</span>
+            <span className="tabular-nums text-brass-hi">{e.count}</span>
+          </li>
+        ))}
+      </ul>
+    </FileCard>
+  );
+}
 
 export default function Lobby({
   state,
@@ -95,6 +132,8 @@ export default function Lobby({
           )}
         </ul>
       </FileCard>
+
+      <PendingRosterCard state={state} />
 
       {isHost && (
         <Button

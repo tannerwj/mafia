@@ -2,7 +2,7 @@ import { nextRandom, shuffle } from "./rng";
 import { materializeRoleCounts, type Ruleset } from "./ruleset";
 import { activeNightActionFor, canSubmitMafiaVote, configureRoles, currentRoles, getRole, hasNightInput, mafiaKillers, type RoleRegistry } from "./roles";
 import { resolveNight } from "./resolve-night";
-import { resolveConsensus } from "./consensus";
+import { lockReadiness, resolveConsensus } from "./consensus";
 import { evaluateWin } from "./win";
 import type { Command, Effect, EngineResult, GameEvent, GameState, LobbyPlayer, PlayerState, VoteTarget } from "./types";
 
@@ -27,6 +27,11 @@ function transition(state: GameState, phase: GameState["phase"], now?: number): 
   state.phase = phase;
   state.phaseGen += 1;
   state.deadlineAt = null;
+  // Spec 11: a fresh dawn starts with no acknowledgements — reset on every
+  // transition so a queued ack for a past dawn can never carry forward (the
+  // phaseGen guard on `acknowledge` is the primary defense; this is belt-and-
+  // suspenders and keeps the field bounded).
+  state.acknowledgedBy = [];
   if (phase === "night") {
     state.day += 1;
     state.cycleDeaths = 0;
@@ -79,6 +84,7 @@ export function startGame(players: LobbyPlayer[], ruleset: Ruleset, seed: number
     deaths: [],
     winners: null,
     cycleDeaths: 0,
+    acknowledgedBy: [],
   };
   const deadlineEffects = effectsForDeadline(state, now);
   return advanceIfComplete(state, deadlineEffects, now);
@@ -124,8 +130,11 @@ export function applyCommand(input: GameState, cmd: Command): EngineResult {
     if (cmd.type === "submitAction") return submitAction(input, state, cmd);
     if (cmd.type === "castVote") return castVote(input, state, cmd.playerId, cmd.target, cmd.now);
     if (cmd.type === "retractVote") return retractVote(input, state, cmd.playerId);
-    if (cmd.type === "lockAction") return setMafiaLock(input, state, cmd.playerId, true, cmd.now);
-    if (cmd.type === "unlockAction") return setMafiaLock(input, state, cmd.playerId, false, cmd.now);
+    if (cmd.type === "confirmVote") return setVoteLock(input, state, cmd.playerId, true, cmd.now);
+    if (cmd.type === "unconfirmVote") return setVoteLock(input, state, cmd.playerId, false, cmd.now);
+    if (cmd.type === "lockAction") return setNightLock(input, state, cmd.playerId, true, cmd.now);
+    if (cmd.type === "unlockAction") return setNightLock(input, state, cmd.playerId, false, cmd.now);
+    if (cmd.type === "acknowledge") return acknowledge(input, state, cmd.playerId, cmd.gen, cmd.now);
     return reject(input, "invalid_command");
   } catch {
     return reject(input, "invalid_command", "playerId" in cmd ? cmd.playerId : undefined);
@@ -149,27 +158,44 @@ function submitAction(original: GameState, state: GameState, cmd: Extract<Comman
   const allowSelf = spec.targetRule === "living-any";
   if (!legalLivingTarget(state, cmd.playerId, cmd.targetId, allowSelf)) return reject(original, "illegal_target", cmd.playerId);
   state.nightActions = state.nightActions.filter((a) => a.actorId !== cmd.playerId);
-  state.nightActions.push({ actorId: cmd.playerId, actionType: spec.actionType, targetId: cmd.targetId });
+  // Spec 11: individual actions are pick→confirm — (re)submitting a target
+  // always resets `locked` to false (same rule as mafia votes), so a stray
+  // matching tap never carries a lock onto a new target and readiness waits
+  // for an explicit confirm.
+  state.nightActions.push({ actorId: cmd.playerId, actionType: spec.actionType, targetId: cmd.targetId, locked: false });
   state.log.push({ type: "actionSubmitted", actorId: cmd.playerId, actionType: spec.actionType, targetId: cmd.targetId, day: state.day });
   return advanceIfComplete(state, [], cmd.now);
 }
 
-/** `lock_action`/`unlock_action` (Spec 08). Phase-gate before role-gate (both
- * reject safely, per the spec): a lock/unlock arriving once the night has
- * already resolved (phase moved past "night") rejects as `not_lockable`,
- * never silently ignored. Applies only to a living voter whose role is a
- * mafia-consensus killer during night — anyone else (including a
- * currently-absent killer, which `alive()`/`player.absent` in
- * `applyCommand` already gate before we get here) also gets
- * `not_lockable`. Locking with no target set (`targetId === null`) is
+/** `lock_action`/`unlock_action` (Spec 08, generalized in Spec 11). Phase-gate
+ * before role-gate (both reject safely): a lock/unlock arriving once the night
+ * has already resolved (phase moved past "night") rejects as `not_lockable`,
+ * never silently ignored. Dispatches on the sender's night input:
+ *   - a living mafia-consensus killer → locks their mafia kill vote;
+ *   - any other living non-absent player → locks their INDIVIDUAL night
+ *     submission (a real action OR the decoy `"watch"`), the Spec 11 uniform
+ *     pick→confirm flow.
+ * Locking with no pick set (`targetId === null` / no submission) is
  * `no_pick_to_lock`, distinct from `not_lockable`. */
-function setMafiaLock(original: GameState, state: GameState, playerId: string, locked: boolean, now?: number): EngineResult {
+function setNightLock(original: GameState, state: GameState, playerId: string, locked: boolean, now?: number): EngineResult {
   if (state.phase !== "night") return reject(original, "not_lockable", playerId);
-  if (!canSubmitMafiaVote(state, currentRoles(), playerId)) return reject(original, "not_lockable", playerId);
-  const vote = state.mafiaVotes.find((v) => v.playerId === playerId);
-  if (locked && (!vote || vote.targetId === null)) return reject(original, "no_pick_to_lock", playerId);
-  if (!vote) return reject(original, "not_lockable", playerId);
-  vote.locked = locked;
+  const registry = currentRoles();
+  if (canSubmitMafiaVote(state, registry, playerId)) {
+    const vote = state.mafiaVotes.find((v) => v.playerId === playerId);
+    if (locked && (!vote || vote.targetId === null)) return reject(original, "no_pick_to_lock", playerId);
+    if (!vote) return reject(original, "not_lockable", playerId);
+    vote.locked = locked;
+    state.log.push({ type: locked ? "actionLocked" : "actionUnlocked", actorId: playerId, day: state.day });
+    return advanceIfComplete(state, [], now);
+  }
+  // Individual night input (real or decoy). `hasNightInput` gates who may
+  // lock at all — a player with no owed night input (e.g. a dead/absent seat,
+  // already rejected upstream) is `not_lockable`.
+  if (!hasNightInput(state, registry, playerId)) return reject(original, "not_lockable", playerId);
+  const action = state.nightActions.find((a) => a.actorId === playerId);
+  if (locked && (!action || action.targetId === null)) return reject(original, "no_pick_to_lock", playerId);
+  if (!action) return reject(original, "not_lockable", playerId);
+  action.locked = locked;
   state.log.push({ type: locked ? "actionLocked" : "actionUnlocked", actorId: playerId, day: state.day });
   return advanceIfComplete(state, [], now);
 }
@@ -181,7 +207,10 @@ function castVote(original: GameState, state: GameState, playerId: string, targe
   } else if (!state.players.some((p) => p.id === target && p.alive)) return reject(original, "illegal_target", playerId);
   if (state.phase === "runoff" && target !== "no_murder" && !state.runoffCandidates?.includes(target)) return reject(original, "illegal_target", playerId);
   state.votes = state.votes.filter((v) => v.playerId !== playerId);
-  state.votes.push({ playerId, target });
+  // Spec 11: a cast vote is TENTATIVE (`locked:false`) — re-casting a
+  // different target always returns it to tentative (same rule as night
+  // picks), so the day phase never resolves early on an all-tentative table.
+  state.votes.push({ playerId, target, locked: false });
   state.log.push({ type: "voteCast", voterId: playerId, target, day: state.day, phase: state.phase });
   return advanceIfComplete(state, [], now);
 }
@@ -191,6 +220,35 @@ function retractVote(original: GameState, state: GameState, playerId: string): E
   state.votes = state.votes.filter((v) => v.playerId !== playerId);
   state.log.push({ type: "voteRetracted", voterId: playerId, day: state.day, phase: state.phase });
   return { state, effects: [] };
+}
+
+/** Spec 11: `confirm_vote`/`unconfirm_vote` lock/unlock the sender's tentative
+ * DAY vote. Phase-gated to day/runoff; confirming with no cast vote is
+ * `no_pick_to_lock`. Locking is what makes the day phase ready (all living
+ * locked); unlocking or re-casting returns to tentative. */
+function setVoteLock(original: GameState, state: GameState, playerId: string, locked: boolean, now?: number): EngineResult {
+  if (state.phase !== "day" && state.phase !== "runoff") return reject(original, "not_your_phase", playerId);
+  const vote = state.votes.find((v) => v.playerId === playerId);
+  if (locked && !vote) return reject(original, "no_pick_to_lock", playerId);
+  if (!vote) return reject(original, "not_lockable", playerId);
+  vote.locked = locked;
+  state.log.push({ type: locked ? "voteLocked" : "voteUnlocked", voterId: playerId, day: state.day, phase: state.phase });
+  return advanceIfComplete(state, [], now);
+}
+
+/** Spec 11: `acknowledge` the current dawn Morning Report. phaseGen-guarded
+ * like `forceAdvance` — a queued ack whose `gen` no longer matches the current
+ * phase is a stale no-op (must not ack the next phase). Only meaningful during
+ * dawn; outside dawn it's a harmless no-op (no error surface — a late ack for
+ * a dawn that already advanced is expected). Once every living player has
+ * acknowledged, the dawn advances to day. */
+function acknowledge(original: GameState, state: GameState, playerId: string, gen: number, now?: number): EngineResult {
+  if (gen !== state.phaseGen) return { state: original, effects: [] };
+  if (state.phase !== "dawn") return { state: original, effects: [] };
+  if (state.acknowledgedBy.includes(playerId)) return { state: original, effects: [] };
+  state.acknowledgedBy.push(playerId);
+  state.log.push({ type: "acknowledged", playerId, day: state.day });
+  return advanceIfComplete(state, [], now);
 }
 
 // Night mafia-kill readiness (Spec 08, the crux): the phase can only
@@ -211,19 +269,44 @@ function mafiaReady(state: GameState): boolean {
   return result.ready && (result.converged || killers.length === 0);
 }
 
+// Spec 11: night readiness = every living non-absent INDIVIDUAL night input
+// (real action OR decoy `"watch"`) is LOCKED, AND mafia consensus is met.
+// `hasNightInput` now includes decoy roles, so `individualParticipants` is
+// every living non-absent player who is NOT a mafia-consensus killer. Uses the
+// shared `lockReadiness` helper (do not fork). A tentative (unlocked) pick
+// never makes the night ready — same gate as the day vote.
 function pendingNight(state: GameState): number {
-  const individual = state.players.filter((p) => hasNightInput(state, currentRoles(), p.id) && !state.nightActions.some((a) => a.actorId === p.id)).length;
-  const killers = mafiaKillers(state, currentRoles());
+  const registry = currentRoles();
+  const individualParticipants = state.players.filter((p) => hasNightInput(state, registry, p.id)).map((p) => p.id);
+  const submissions = state.nightActions.map((a) => ({ id: a.actorId, locked: a.locked }));
+  const individualPending = individualParticipants.length - lockReadiness(individualParticipants, submissions).lockedCount;
+  const killers = mafiaKillers(state, registry);
   const mafiaPending = killers.length > 0 && !mafiaReady(state) ? 1 : 0;
-  return individual + mafiaPending;
+  return individualPending + mafiaPending;
 }
 
+// Spec 11 REDEFINITION (⚠ the crux): count living non-absent players WITHOUT a
+// LOCKED vote (not merely without a cast). The phase resolves only when
+// `pendingVotes === 0` — i.e. every living player has confirmed. Counting
+// "uncast" here would resolve the day early on an all-tentative table (the
+// opposite bug). Uses the shared `lockReadiness` helper.
 function pendingVotes(state: GameState): number {
-  return state.players.filter((p) => p.alive && !p.absent && !state.votes.some((v) => v.playerId === p.id)).length;
+  const participants = state.players.filter((p) => p.alive && !p.absent).map((p) => p.id);
+  const submissions = state.votes.map((v) => ({ id: v.playerId, locked: v.locked }));
+  return participants.length - lockReadiness(participants, submissions).lockedCount;
+}
+
+// Spec 11: dawn is acknowledge-gated. It advances once every living non-absent
+// player has acknowledged the Morning Report. The beat backstop
+// (timerExpired) and host force-advance still advance it regardless (both take
+// the `forced` path in advancePhase — dawn→day is unconditional there).
+function pendingDawnAcks(state: GameState): number {
+  return state.players.filter((p) => p.alive && !p.absent && !state.acknowledgedBy.includes(p.id)).length;
 }
 
 function advanceIfComplete(state: GameState, effects: Effect[], now?: number): EngineResult {
   if (state.phase === "night" && pendingNight(state) === 0) return advancePhase(state, now, false);
+  if (state.phase === "dawn" && pendingDawnAcks(state) === 0) return advancePhase(state, now, false);
   if ((state.phase === "day" || state.phase === "runoff") && pendingVotes(state) === 0) return advancePhase(state, now, false);
   return withWin(state, effects);
 }
@@ -247,8 +330,15 @@ function advancePhase(state: GameState, now?: number, forced = false): EngineRes
 }
 
 function resolveVote(state: GameState, now?: number): EngineResult {
+  // Spec 11: resolve from LOCKED votes only. On a natural resolution every
+  // living player is locked (readiness gate). On a forced/timer resolution,
+  // unlocked (tentative) votes are treated as abstentions — the pinned
+  // "resolve from locked votes only" rule.
   const tally = new Map<VoteTarget, number>();
-  for (const vote of state.votes) tally.set(vote.target, (tally.get(vote.target) ?? 0) + 1);
+  for (const vote of state.votes) {
+    if (!vote.locked) continue;
+    tally.set(vote.target, (tally.get(vote.target) ?? 0) + 1);
+  }
   const living = state.players.filter((p) => p.alive);
   let eliminated: string | null = null;
   let reason = "peace";

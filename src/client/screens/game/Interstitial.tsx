@@ -12,6 +12,7 @@
 // (`resolvedLog` in src/engine/project.ts filters hidden-vote events and
 // strips `actionSubmitted` for non-god viewers).
 import type { ClientGameView, GameEvent } from "../../../shared/game-view";
+import { acknowledge } from "../../store/gameStore";
 
 function playerLabel(playerNames: Map<string, string>, id: string): string {
   return playerNames.get(id) ?? "Someone";
@@ -82,8 +83,16 @@ export default function Interstitial({
   const lines = announcementsFor(game, playerNames);
   const heading = isDawn ? "Morning bulletin" : "Evening dispatch";
   const fallback = isDawn
-    ? "The town wakes to a quiet night. No incidents on file."
+    ? "The night passed — no one died."
     : "The town settles in for the night.";
+
+  // Spec 11 Feature 3: dawn is a Morning Report every living player must
+  // acknowledge (Continue). The phase advances on all-ack OR the beat backstop
+  // OR host force — so it can't hang but everyone can read it. `acknowledge`
+  // carries `phaseGen`; a stale ack (phase already advanced) no-ops
+  // server-side. Dusk stays a passive auto-advancing announcement this round.
+  const you = game.you;
+  const acked = you?.acknowledged ?? false;
 
   return (
     <div
@@ -93,7 +102,10 @@ export default function Interstitial({
     >
       {/* A typed case bulletin on a torn sheet. The torn top edge is a
           decorative pseudo-layer (pointer-events:none via .file-torn). */}
-      <div className="file-torn relative w-full max-w-sm rounded-sm border border-frame bg-ink-2 p-6 text-center shadow-card">
+      <div
+        data-testid={isDawn ? "morning-report" : undefined}
+        className="file-torn relative w-full max-w-sm rounded-sm border border-frame bg-ink-2 p-6 text-center shadow-card"
+      >
         <p className="text-[0.6rem] uppercase tracking-[0.35em] text-smoke">
           {isDawn ? "Dawn report" : "Nightfall report"} · File Day {game.day}
         </p>
@@ -117,6 +129,22 @@ export default function Interstitial({
             ))
           )}
         </div>
+
+        {isDawn &&
+          (acked ? (
+            <p className="mt-6 text-sm text-smoke">
+              // waiting for the rest of the room…
+            </p>
+          ) : (
+            <button
+              type="button"
+              data-testid="acknowledge-button"
+              onClick={() => acknowledge(game.phaseGen)}
+              className="mt-6 min-h-11 w-full rounded-sm border-2 border-brass bg-ink-3 px-4 py-3 text-sm font-bold uppercase tracking-[0.1em] text-brass-hi transition-colors"
+            >
+              Continue
+            </button>
+          ))}
       </div>
     </div>
   );

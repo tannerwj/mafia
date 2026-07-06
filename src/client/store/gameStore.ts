@@ -175,6 +175,22 @@ export function retractVote(): void {
   useGameStore.getState().send({ type: "retract_vote" });
 }
 
+export function confirmVote(): void {
+  useGameStore.getState().send({ type: "confirm_vote" });
+}
+
+export function unconfirmVote(): void {
+  useGameStore.getState().send({ type: "unconfirm_vote" });
+}
+
+export function acknowledge(gen: number): void {
+  useGameStore.getState().send({ type: "acknowledge", gen });
+}
+
+export function setRuleset(ruleset: unknown): void {
+  useGameStore.getState().send({ type: "set_ruleset", ruleset });
+}
+
 export function lockAction(): void {
   useGameStore.getState().send({ type: "lock_action" });
 }

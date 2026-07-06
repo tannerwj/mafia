@@ -39,6 +39,8 @@ async function joinAsPlayer(page: Page, roomCode: string, name: string) {
 async function startGameWithSeed(hostPage: Page, seed: number) {
   await hostPage.evaluate((s) => {
     sessionStorage.setItem("mafia:testSeed", String(s));
+    // Spec 11: empty role override -> Room sends the exact HOUSE_RULESET shape.
+    sessionStorage.setItem("mafia:testRoles", "{}");
   }, seed);
   await hostPage.getByTestId("start-game").click();
 }

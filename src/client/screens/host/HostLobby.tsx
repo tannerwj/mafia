@@ -1,46 +1,151 @@
-// HostLobby (D1): restyle of Spec 01's functional lobby — player list +
-// presence, kick, large room code + share, start button with a player-count
-// gate and a HOUSE_RULES summary card. Player screens (Lobby.tsx) are
-// untouched — this is a separate component for the host identity only.
+// HostLobby (D1, Spec 11 Feature 4 / Spec 06 D1 slice): player list +
+// presence + kick + room code/share + a LIVE role-count editor. The host sets
+// per-role counts with steppers (mafia / detective / angel / suicide bomber /
+// minion; villagers = remainder); `validateRuleset` runs live so Start is
+// enabled only for a legal setup, which unlocks small games (1 mafia + 2
+// villagers = 3 players). Every edit broadcasts `set_ruleset` (debounced) so
+// players see the roster (counts only) via `pendingRuleset`. The chosen
+// ruleset is handed up to `onStartGame`.
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClientRoomState } from "../../../shared/protocol";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
-import { FieldRow, Stamp } from "../../components/ui/dossier";
+import { Stamp } from "../../components/ui/dossier";
 import HelpButton from "../../components/HelpButton";
-import { HOUSE_RULESET } from "../../lib/houseRuleset";
-import { HOUSE_RULES, validateRuleset } from "../../../engine";
+import { HOUSE_RULES, autoMafiaCount, validateRuleset, type Ruleset } from "../../../engine";
+import { setRuleset as sendSetRuleset } from "../../store/gameStore";
 import { hostSeatRows } from "../../store/hostView";
 import { PlayerTable } from "./PlayerTable";
 import PrivacyChip from "./PrivacyChip";
 
-// Smallest player count that clears validation for the house ruleset. Probed
-// (not hardcoded) so this stays honest if the ruleset's fixed role counts
-// change — the previous hardcoded `MIN_PLAYERS = 3` was wrong for HOUSE_RULES
-// (needs >=5), producing an enabled "Start game" that failed server-side
-// validation with a confusing role_count_mismatch error.
-function minPlayersForHouse(): number {
-  for (let n = 1; n <= 20; n++) {
-    if (validateRuleset(HOUSE_RULES, n).errors.length === 0) return n;
+// The roles the host can dial (villagers are the remainder). Order is the
+// stable display order.
+const EDITABLE_ROLES: { id: string; label: string }[] = [
+  { id: "mafia", label: "Mafia" },
+  { id: "detective", label: "Detective" },
+  { id: "angel", label: "Angel" },
+  { id: "suicide_bomber", label: "Suicide bomber" },
+  { id: "minion", label: "Minion" },
+];
+
+const SET_RULESET_DEBOUNCE_MS = 250;
+
+type Counts = Record<string, number>;
+
+function countsFromRuleset(roles: Record<string, number | "auto">): Counts {
+  const out: Counts = {};
+  for (const { id } of EDITABLE_ROLES) {
+    const v = roles[id];
+    out[id] = typeof v === "number" ? v : id === "mafia" ? 1 : 0;
   }
-  return 20;
+  return out;
 }
 
-function HouseRulesSummary() {
-  const r = HOUSE_RULESET;
+// The wire ruleset: explicit editable counts + villager as the auto remainder,
+// every other field inherited from the house ruleset (only counts are
+// editable this round — Spec 11 non-goal).
+function rulesetFromCounts(counts: Counts): Ruleset {
+  return {
+    ...HOUSE_RULES,
+    roles: {
+      villager: "auto",
+      mafia: counts.mafia ?? 1,
+      detective: counts.detective ?? 0,
+      angel: counts.angel ?? 0,
+      suicide_bomber: counts.suicide_bomber ?? 0,
+      minion: counts.minion ?? 0,
+    },
+  };
+}
+
+function Stepper({
+  label,
+  value,
+  min,
+  onChange,
+  testid,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  onChange: (next: number) => void;
+  testid: string;
+}) {
   return (
-    <Card data-testid="house-rules-summary" className="w-full bg-ink-3">
+    <div
+      data-testid={testid}
+      data-count={value}
+      className="flex items-center justify-between gap-2 rounded-sm border border-frame bg-ink-2 px-3 py-2"
+    >
+      <span className="text-sm text-paper">{label}</span>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          data-testid={`${testid}-dec`}
+          aria-label={`Decrease ${label}`}
+          disabled={value <= min}
+          onClick={() => onChange(value - 1)}
+          className="flex h-11 w-11 items-center justify-center rounded-sm border border-frame text-lg text-paper disabled:opacity-40"
+        >
+          −
+        </button>
+        <span data-testid={`${testid}-value`} className="w-6 text-center tabular-nums text-brass-hi">
+          {value}
+        </span>
+        <button
+          type="button"
+          data-testid={`${testid}-inc`}
+          aria-label={`Increase ${label}`}
+          onClick={() => onChange(value + 1)}
+          className="flex h-11 w-11 items-center justify-center rounded-sm border border-frame text-lg text-paper"
+        >
+          +
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RoleCountEditor({
+  counts,
+  villagers,
+  playerCount,
+  onChange,
+}: {
+  counts: Counts;
+  villagers: number;
+  playerCount: number;
+  onChange: (id: string, next: number) => void;
+}) {
+  const mafiaHint = autoMafiaCount(Math.max(playerCount, 1), "sqrt");
+  return (
+    <Card data-testid="role-count-editor" className="w-full bg-ink-3">
       <CardHeader className="pb-2">
-        <CardTitle>Case parameters</CardTitle>
+        <CardTitle>Cast the case</CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-1.5 pb-4 text-sm text-paper/80">
-        <FieldRow label="Mafia count" value={`auto (${r.mafiaCountFormula})`} />
-        <FieldRow label="Detective / Angel / Bomber" value="1 each" />
-        <FieldRow label="Tie policy" value={r.tiePolicy} />
-        <FieldRow label="Vote threshold" value={r.dayVoteThreshold} />
-        <FieldRow label="Mafia consensus" value={r.mafiaConsensus} />
-        <FieldRow label="Reveal on death" value={r.revealOnDeath} />
-        <FieldRow label="Voting visibility" value={r.votingVisibility} />
-        <FieldRow label="Timers" value="untimed" />
+      <CardContent className="flex flex-col gap-2 pb-4">
+        {EDITABLE_ROLES.map((r) => (
+          <Stepper
+            key={r.id}
+            label={r.label}
+            value={counts[r.id] ?? 0}
+            min={r.id === "mafia" ? 1 : 0}
+            onChange={(next) => onChange(r.id, next)}
+            testid={`role-count-${r.id}`}
+          />
+        ))}
+        <div
+          data-testid="role-count-villager"
+          data-count={villagers}
+          className="flex items-center justify-between gap-2 rounded-sm border border-dashed border-frame bg-ink-2 px-3 py-2"
+        >
+          <span className="text-sm text-paper">Villagers</span>
+          <span className="w-6 text-center tabular-nums text-smoke">{villagers}</span>
+        </div>
+        <p className="mt-1 text-[0.7rem] text-smoke">
+          // Villagers fill the remainder. Suggested mafia for {playerCount || "—"} players:{" "}
+          {mafiaHint}. Consider a day timer for unattended play.
+        </p>
       </CardContent>
     </Card>
   );
@@ -55,14 +160,41 @@ export default function HostLobby({
   state: ClientRoomState;
   onKick: (playerId: string) => void;
   onCopyLink: () => void;
-  onStartGame: () => void;
+  onStartGame: (ruleset: Ruleset) => void;
 }) {
   const rows = hostSeatRows(state);
-  // Honest start gate: mirror the server's own check. The host is a pure
-  // arbitrator (not a player), so state.players.length is the real seat count
-  // start_game will validate against.
-  const canStart = validateRuleset(HOUSE_RULES, state.players.length).errors.length === 0;
-  const minPlayers = minPlayersForHouse();
+  const playerCount = state.players.length;
+
+  // Seed the editor from the broadcast pending ruleset (so a reconnecting host
+  // sees their own prior edits) falling back to the house ruleset.
+  const [counts, setCounts] = useState<Counts>(() =>
+    countsFromRuleset(state.pendingRuleset?.roles ?? HOUSE_RULES.roles),
+  );
+
+  const editableTotal = EDITABLE_ROLES.reduce((sum, r) => sum + (counts[r.id] ?? 0), 0);
+  const villagers = Math.max(0, playerCount - editableTotal);
+  const ruleset = useMemo(() => rulesetFromCounts(counts), [counts]);
+  const validation = validateRuleset(ruleset, playerCount);
+  const canStart = playerCount >= 3 && validation.errors.length === 0;
+  const startBlockedReason =
+    playerCount < 3 ? "Need at least 3 players" : validation.errors[0]?.message ?? "Adjust the roster";
+
+  // Debounced set_ruleset broadcast (Spec 06: debounced, excluded from
+  // lastActivityAt server-side). Skip the very first render so we don't echo
+  // the seed back immediately.
+  const firstRender = useRef(true);
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false;
+      return;
+    }
+    const t = setTimeout(() => sendSetRuleset(ruleset), SET_RULESET_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [ruleset]);
+
+  function handleCount(id: string, next: number) {
+    setCounts((prev) => ({ ...prev, [id]: Math.max(id === "mafia" ? 1 : 0, next) }));
+  }
 
   return (
     <main className="safe-top safe-bottom safe-x relative z-10 mx-auto flex min-h-dvh w-full max-w-3xl flex-col items-center gap-6 bg-ink p-6 text-paper">
@@ -97,23 +229,28 @@ export default function HostLobby({
       <div className="grid w-full grid-cols-1 gap-6 md:grid-cols-2">
         <div className="flex flex-col gap-3">
           <p className="text-[0.65rem] uppercase tracking-[0.2em] text-smoke">
-            Subjects ({state.players.length})
+            Subjects ({playerCount})
           </p>
           <PlayerTable rows={rows} inGame={false} lobbyMode onKick={onKick} />
         </div>
 
         <div className="flex flex-col gap-4">
-          <HouseRulesSummary />
+          <RoleCountEditor
+            counts={counts}
+            villagers={villagers}
+            playerCount={playerCount}
+            onChange={handleCount}
+          />
           <Button
             type="button"
             data-testid="start-game"
-            onClick={onStartGame}
+            onClick={() => onStartGame(ruleset)}
             disabled={!canStart}
             size="lg"
             variant="brass"
             className="w-full"
           >
-            {canStart ? "Start game" : `Need at least ${minPlayers} players`}
+            {canStart ? "Start game" : startBlockedReason}
           </Button>
         </div>
       </div>

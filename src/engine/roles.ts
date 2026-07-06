@@ -5,7 +5,23 @@ export interface NightActionSpec {
   priorityBand: 100 | 200 | 300 | 400 | 450 | 500;
   targetRule: "living-other" | "living-any" | "any";
   consensus?: "mafia";
+  // Spec 11: the inert decoy. `activeNightActionFor` synthesizes one of these
+  // for any living non-absent player whose role has no real `nightAction`, so
+  // every living player performs the same pick→confirm shape at night. A
+  // decoy `"watch"` creates NO visit any resolver observes (every
+  // resolve-night.ts filter is an allow-list). Never authored on a real role.
+  decoy?: boolean;
 }
+
+// Spec 11: the synthetic decoy spec handed to no-action roles. `living-other`
+// so the picker matches the detective's shape (pick another living player);
+// `priorityBand` is arbitrary — the resolver never reads a `"watch"` action.
+const DECOY_WATCH_SPEC: NightActionSpec = {
+  actionType: "watch",
+  priorityBand: 100,
+  targetRule: "living-other",
+  decoy: true,
+};
 
 export interface RoleDef {
   id: RoleId;
@@ -93,15 +109,26 @@ export function getRole(registry: RoleRegistry, roleId: RoleId): RoleDef {
   return role;
 }
 
+// Spec 11: every living, non-absent player has a night input now. A role with
+// a real `nightAction` returns that spec (unless it's the mafiaKill suppressed
+// on a firstNightKill=false night 1 — those killers then fall through to the
+// decoy, so they still pick→confirm and the night stays uniform); a role with
+// no real night action returns the synthetic decoy `"watch"` spec.
 export function activeNightActionFor(state: GameState, registry: RoleRegistry, playerId: PlayerId): NightActionSpec | undefined {
   const player = state.players.find((p) => p.id === playerId);
   if (!player || !player.alive || player.absent) return undefined;
   const role = registry[player.roleId];
-  if (!role?.nightAction) return undefined;
-  if (role.nightAction.actionType === "mafiaKill" && !state.ruleset.firstNightKill && state.day === 1) return undefined;
-  return role.nightAction;
+  const real = role?.nightAction;
+  if (real && !(real.actionType === "mafiaKill" && !state.ruleset.firstNightKill && state.day === 1)) {
+    return real;
+  }
+  return DECOY_WATCH_SPEC;
 }
 
+// Spec 11: an INDIVIDUAL (non-mafia-consensus) night input this player owes —
+// a real individual action OR the decoy. Mafia consensus is gated separately
+// (mafiaKillers + resolveConsensus), so it is excluded here. Returns true for
+// decoy roles so they count toward night readiness.
 export function hasNightInput(state: GameState, registry: RoleRegistry, playerId: PlayerId): boolean {
   const spec = activeNightActionFor(state, registry, playerId);
   if (!spec) return false;

@@ -8,6 +8,28 @@
 import type { MafiaVote, PlayerState } from "./types";
 import type { MafiaConsensus } from "./ruleset";
 
+// Spec 11 — the ONE generic lock-readiness helper, shared by BOTH day-vote
+// readiness AND night individual-action readiness (do NOT fork a second lock
+// system). It answers only "has each participant locked their own input"; it
+// says nothing about WHAT they locked. Mafia factional CONSENSUS
+// (unanimous/majority/designated agreement on a single target) is a distinct
+// concern and stays in `resolveConsensus` on top of this.
+//
+// `participants`: the ids that must lock for the phase to be ready (living
+// non-absent voters for the day; living non-absent individual night actors
+// for the night). `submissions`: the current locked-state per participant
+// (only ids present AND `locked` count). Absent/uncast/tentative → not locked.
+export interface LockReadiness {
+  allLocked: boolean;
+  lockedCount: number;
+}
+
+export function lockReadiness(participants: string[], submissions: { id: string; locked: boolean }[]): LockReadiness {
+  const lockedIds = new Set(submissions.filter((s) => s.locked).map((s) => s.id));
+  const lockedCount = participants.filter((p) => lockedIds.has(p)).length;
+  return { allLocked: participants.length > 0 ? lockedCount === participants.length : true, lockedCount };
+}
+
 export interface ConsensusResult {
   /** True once the readiness gate for this consensus mode holds: every
    * living non-absent killer has a qualifying vote (LOCKED, when

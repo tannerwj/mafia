@@ -28,6 +28,8 @@ async function joinAsPlayer(page: Page, roomCode: string, name: string) {
 async function startGameWithSeed(hostPage: Page, seed: number) {
   await hostPage.evaluate((s) => {
     sessionStorage.setItem("mafia:testSeed", String(s));
+    // Spec 11: empty role override -> Room sends the exact HOUSE_RULESET shape.
+    sessionStorage.setItem("mafia:testRoles", "{}");
   }, seed);
   await hostPage.getByTestId("start-game").click();
 }
@@ -42,6 +44,29 @@ async function waitForRoleRevealToClose(page: Page) {
   await expect(page.getByTestId("role-reveal-dialog")).toHaveCount(0, {
     timeout: 15_000,
   });
+}
+
+// Spec 11: confirm an individual night pick (detective/angel).
+async function confirmNight(page: Page, targetName: string) {
+  await page.getByTestId("night-target-option").filter({ hasText: targetName }).click();
+  const confirm = page.getByTestId("night-confirm-button");
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+}
+
+// Spec 11: a no-action role files the inert decoy "watch" pick + confirm.
+async function settleWatch(page: Page, targetName: string) {
+  const option = page.getByTestId("night-watch-option").filter({ hasText: targetName });
+  await expect(option.first()).toBeVisible();
+  await option.first().click();
+  const confirm = page.getByTestId("night-confirm-button");
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+}
+
+async function acknowledgeMorning(page: Page) {
+  const button = page.getByTestId("acknowledge-button");
+  if (await button.isVisible().catch(() => false)) await button.click();
 }
 
 async function setUpFivePlayerGame(browser: import("@playwright/test").Browser, seed: number) {
@@ -130,8 +155,11 @@ test("lock-in: two mafia see each other's live tentative picks; night resolves o
   await expect(game.bob.getByTestId("mafia-consensus")).toHaveAttribute("data-consensus-reached", "true");
   await expect(game.alice.getByTestId("game-screen")).toHaveAttribute("data-phase", "night");
 
-  await game.dave.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
-  await game.alice.getByTestId("night-target-option").filter({ hasText: "Bob" }).click();
+  // Spec 11: the angel + detective confirm, and the bomber (Carol) files a
+  // decoy — every living player pick→confirms for the night to complete.
+  await confirmNight(game.dave, "Carol");
+  await confirmNight(game.alice, "Bob");
+  await settleWatch(game.carol, "Alice");
 
   await waitForPhase(game.alice, "dawn", 25_000);
 
@@ -162,11 +190,13 @@ test("lock-in: unlocking BEFORE the second lock keeps the night open; re-locking
   await game.erin.getByTestId("lock-in-button").click();
   await expect(game.alice.getByTestId("game-screen")).toHaveAttribute("data-phase", "night");
 
-  // Bob locks back in -- now both are locked and agreed. Dave (angel) and
-  // Alice (detective) still need to submit their own individual actions.
+  // Bob locks back in -- now both are locked and agreed. Spec 11: Dave
+  // (angel) and Alice (detective) confirm their own picks, and Carol (bomber)
+  // files a decoy, before the night resolves.
   await game.bob.getByTestId("lock-in-button").click();
-  await game.dave.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
-  await game.alice.getByTestId("night-target-option").filter({ hasText: "Bob" }).click();
+  await confirmNight(game.dave, "Carol");
+  await confirmNight(game.alice, "Bob");
+  await settleWatch(game.carol, "Alice");
   await waitForPhase(game.alice, "dawn", 25_000);
 
   await game.closeAll();
@@ -199,18 +229,23 @@ test("My Role button is reachable in every in-game phase and opens without leavi
   // Dismissed -- no permanent role text left visible.
   expect(await visibleText()).not.toContain("Detective");
 
-  // Reachable through day phase too (skip past night quickly).
+  // Reachable through day phase too (skip past night quickly). Spec 11: every
+  // living player pick→confirms; the bomber files a decoy; then all ack dawn.
   await game.bob.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
   await expect(game.bob.getByTestId("lock-in-button")).toBeEnabled();
   await game.bob.getByTestId("lock-in-button").click();
   await game.erin.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
   await expect(game.erin.getByTestId("lock-in-button")).toBeEnabled();
   await game.erin.getByTestId("lock-in-button").click();
-  await game.dave.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
-  await game.alice.getByTestId("night-target-option").filter({ hasText: "Bob" }).click();
+  await confirmNight(game.dave, "Carol");
+  await confirmNight(game.alice, "Bob");
+  await settleWatch(game.carol, "Alice");
 
   await waitForPhase(game.alice, "dawn", 25_000);
   await expect(game.alice.getByTestId("my-role-button")).toBeVisible();
+  for (const p of [game.alice, game.bob, game.carol, game.dave, game.erin]) {
+    await acknowledgeMorning(p);
+  }
 
   await waitForPhase(game.alice, "day", 25_000);
   await expect(game.alice.getByTestId("my-role-button")).toBeVisible();
@@ -244,8 +279,13 @@ test("dead players still have a working My Role button showing their real role",
   await game.erin.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
   await expect(game.erin.getByTestId("lock-in-button")).toBeEnabled();
   await game.erin.getByTestId("lock-in-button").click();
-  await game.dave.getByTestId("night-target-option").filter({ hasText: "Bob" }).click();
-  await game.alice.getByTestId("night-target-option").filter({ hasText: "Bob" }).click();
+  // Spec 11: Dave (angel) + Alice (detective) confirm, and Carol (the kill
+  // target, still ALIVE at submit time) files her decoy — the night can only
+  // resolve once every living player has locked, and that resolution is what
+  // kills Carol and triggers the mafia parity win.
+  await confirmNight(game.dave, "Bob");
+  await confirmNight(game.alice, "Bob");
+  await settleWatch(game.carol, "Alice");
 
   await waitForPhase(game.carol, "ended", 25_000);
 
@@ -264,8 +304,8 @@ test("Instructions modal opens from the lobby and in-game, and closes cleanly", 
   const hostPage = await hostCtx.newPage();
   await createRoomAsHost(hostPage);
 
-  // Host lobby.
-  await expect(hostPage.getByTestId("house-rules-summary")).toBeVisible();
+  // Host lobby (Spec 11: role-count editor replaces the static summary card).
+  await expect(hostPage.getByTestId("role-count-editor")).toBeVisible();
   await hostPage.getByTestId("help-button").click();
   await expect(hostPage.getByTestId("instructions-modal")).toBeVisible();
   await expect(hostPage.getByTestId("instructions-modal")).toContainText("Objective");

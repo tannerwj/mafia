@@ -101,6 +101,7 @@ export default function GameScreen({
           roleId={you.roleId}
           mafiaRoster={you.mafiaRoster}
           playerNames={new Map(players.map((p) => [p.id, p.name]))}
+          investigationResults={you.investigationResults}
         />
       )}
       <HelpButton className="fixed bottom-3 right-3 z-60 flex h-11 w-11 items-center justify-center rounded-sm border-2 border-frame bg-ink-2 text-lg text-paper shadow-lg safe-bottom safe-x" />

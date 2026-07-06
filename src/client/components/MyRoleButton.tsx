@@ -15,10 +15,12 @@ export default function MyRoleButton({
   roleId,
   mafiaRoster,
   playerNames,
+  investigationResults,
 }: {
   roleId: string;
   mafiaRoster?: string[] | undefined;
   playerNames?: Map<string, string> | undefined;
+  investigationResults?: { day: number; targetId: string; isMafia: boolean }[] | undefined;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -48,7 +50,12 @@ export default function MyRoleButton({
             <Dialog.Description asChild>
               <span className="sr-only">Tap outside or close to dismiss.</span>
             </Dialog.Description>
-            <RoleCard roleId={roleId} mafiaRoster={mafiaRoster} playerNames={playerNames} />
+            <RoleCard
+              roleId={roleId}
+              mafiaRoster={mafiaRoster}
+              playerNames={playerNames}
+              investigationResults={investigationResults}
+            />
             <Dialog.Close asChild>
               <Button
                 type="button"

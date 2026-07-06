@@ -290,6 +290,65 @@ async function advanceViaAlarm(
   return drainSnapshots(game);
 }
 
+/** Spec 11: every living player owes a night input. After the "real" actors
+ * (mafia/angel/detective) have submitted, this settles the rest so the night
+ * can resolve naturally: it locks the angel & detective (they submit in the
+ * scripts but the confirm is new), and drives both villagers' decoy
+ * `"watch"` pick + confirm. Each command drains the broadcast. Pass the
+ * players to skip (e.g. a dead one, or one the test drives itself). */
+async function settleNightRemainder(
+  game: FivePlayerGame,
+  skip: string[] = [],
+): Promise<Record<"angel" | "villager1" | "detective" | "villager2" | "mafia", ClientRoomState>> {
+  let snap!: Record<"angel" | "villager1" | "detective" | "villager2" | "mafia", ClientRoomState>;
+  // Angel & detective: confirm their already-submitted pick.
+  for (const actor of [game.angel, game.detective] as const) {
+    if (skip.includes(actor.playerId)) continue;
+    sendGame(actor.ws, { type: "lock_action" });
+    snap = await drainSnapshots(game);
+  }
+  // Villagers: decoy pick (watch someone alive) + confirm.
+  for (const v of [game.villager1, game.villager2] as const) {
+    if (skip.includes(v.playerId)) continue;
+    sendGame(v.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    snap = await drainSnapshots(game);
+    sendGame(v.ws, { type: "lock_action" });
+    snap = await drainSnapshots(game);
+  }
+  return snap;
+}
+
+/** Spec 11: acknowledge the dawn Morning Report for every living player,
+ * echoing the current phaseGen. Returns the final drained snapshots. */
+async function acknowledgeDawn(
+  game: FivePlayerGame,
+  gen: number,
+  living: readonly { ws: WebSocket; playerId: string }[],
+): Promise<Record<"angel" | "villager1" | "detective" | "villager2" | "mafia", ClientRoomState>> {
+  let snap!: Record<"angel" | "villager1" | "detective" | "villager2" | "mafia", ClientRoomState>;
+  for (const p of living) {
+    sendGame(p.ws, { type: "acknowledge", gen });
+    snap = await drainSnapshots(game);
+  }
+  return snap;
+}
+
+/** Spec 11: cast + confirm a day vote for each listed player. */
+async function voteConfirmAll(
+  game: FivePlayerGame,
+  target: string,
+  voters: readonly { ws: WebSocket; playerId: string }[],
+): Promise<Record<"angel" | "villager1" | "detective" | "villager2" | "mafia", ClientRoomState>> {
+  let snap!: Record<"angel" | "villager1" | "detective" | "villager2" | "mafia", ClientRoomState>;
+  for (const p of voters) {
+    sendGame(p.ws, { type: "cast_vote", target });
+    snap = await drainSnapshots(game);
+    sendGame(p.ws, { type: "confirm_vote" });
+    snap = await drainSnapshots(game);
+  }
+  return snap;
+}
+
 describe("claim protocol", () => {
   test("claim then second claim on the same DO returns taken", async () => {
     const roomCode = "AAAAA";
@@ -767,10 +826,12 @@ describe("full scripted game over real WebSockets", () => {
     await drainSnapshots(game);
     sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
     await drainSnapshots(game);
-    // Spec 08: the sole mafia must LOCK its pick before the night can
-    // complete naturally — submitting alone leaves the phase pending.
+    // Spec 08: the mafia must LOCK its pick. Spec 11: the angel, detective, and
+    // BOTH villagers (via decoy `"watch"`) must also confirm before the night
+    // can complete — every living player performs the same pick→confirm.
     sendGame(game.mafia.ws, { type: "lock_action" });
-    const afterNight1 = await drainSnapshots(game);
+    await drainSnapshots(game);
+    const afterNight1 = await settleNightRemainder(game);
 
     expect(afterNight1.detective.phase).toBe("dawn");
     expect(afterNight1.detective.game?.you?.investigationResults).toEqual([
@@ -794,12 +855,8 @@ describe("full scripted game over real WebSockets", () => {
     expect(afterDawn.detective.phase).toBe("day");
 
     // Day 1: everybody votes no_murder to survive to a second night (so the
-    // angel's night-2 save is the one under test, per the spec's script).
-    let afterDayVote = afterDawn;
-    for (const p of [game.angel, game.villager1, game.detective, game.mafia] as const) {
-      sendGame(p.ws, { type: "cast_vote", target: "no_murder" });
-      afterDayVote = await drainSnapshots(game);
-    }
+    // angel's night-2 save is the one under test). Spec 11: cast + confirm.
+    const afterDayVote = await voteConfirmAll(game, "no_murder", [game.angel, game.villager1, game.detective, game.mafia]);
     expect(afterDayVote.detective.phase).toBe("dusk");
     // The last vote (a player's) armed the dusk beat's deadline too.
     expect(afterDayVote.detective.game?.deadlineAt).not.toBeNull();
@@ -818,7 +875,10 @@ describe("full scripted game over real WebSockets", () => {
     sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
     await drainSnapshots(game);
     sendGame(game.mafia.ws, { type: "lock_action" });
-    const afterNight2 = await drainSnapshots(game);
+    await drainSnapshots(game);
+    // villager2 is dead now — skip it; the rest confirm (angel/detective) and
+    // villager1 files a decoy.
+    const afterNight2 = await settleNightRemainder(game, [game.villager2.playerId]);
 
     expect(afterNight2.detective.phase).toBe("dawn");
     expect(afterNight2.villager1.game?.players.find((p) => p.id === game.villager1.playerId)?.alive).toBe(true);
@@ -840,11 +900,8 @@ describe("full scripted game over real WebSockets", () => {
 
     // Day 2: everyone votes to eliminate the mafia -> village wins the
     // instant mafia count hits zero (evaluated inside vote resolution).
-    let final = afterDawn2;
-    for (const p of [game.angel, game.villager1, game.detective, game.mafia] as const) {
-      sendGame(p.ws, { type: "cast_vote", target: game.mafia.playerId });
-      final = await drainSnapshots(game);
-    }
+    // Spec 11: cast + confirm.
+    const final = await voteConfirmAll(game, game.mafia.playerId, [game.angel, game.villager1, game.detective, game.mafia]);
     expect(final.detective.phase).toBe("ended");
     expect(final.detective.game?.winners).toEqual(["village"]);
 
@@ -878,7 +935,9 @@ describe("mid-game hibernation and rejoin", () => {
     // opaquely) but is still only tentative — lock it in post-eviction to
     // prove the lock command applies cleanly against the reconstructed DO.
     sendGame(game.mafia.ws, { type: "lock_action" });
-    const afterNight1 = await drainSnapshots(game);
+    await drainSnapshots(game);
+    // Spec 11: angel/detective confirm + villagers file decoys to complete.
+    const afterNight1 = await settleNightRemainder(game);
 
     expect(afterNight1.detective.phase).toBe("dawn");
     expect(afterNight1.detective.game?.you?.roleId).toBe("detective");
@@ -951,7 +1010,11 @@ describe("timer path and stale-alarm no-op", () => {
     // night input now — a player, not the host, still triggers the night ->
     // dawn transition.
     sendGame(game.mafia.ws, { type: "lock_action" });
-    const afterNight1 = await drainSnapshots(game);
+    await drainSnapshots(game);
+    // Spec 11: the LAST living player's confirm (a villager's decoy lock, via
+    // settleNightRemainder) is the player-triggered completion that arms the
+    // dawn beat — still a player, not the host.
+    const afterNight1 = await settleNightRemainder(game);
     expect(afterNight1.detective.phase).toBe("dawn");
 
     const stub = await stubFor(game.roomCode);
@@ -1151,11 +1214,14 @@ describe("lifecycle: new_game", () => {
     const afterDawn = await drainSnapshots(game);
     expect(afterDawn.detective.phase).toBe("day");
 
-    let final = afterDawn;
-    for (const p of [game.angel, game.villager1, game.detective, game.villager2, game.mafia] as const) {
-      sendGame(p.ws, { type: "cast_vote", target: game.mafia.playerId });
-      final = await drainSnapshots(game);
-    }
+    // Spec 11: cast + confirm from every living player to resolve the vote.
+    const final = await voteConfirmAll(game, game.mafia.playerId, [
+      game.angel,
+      game.villager1,
+      game.detective,
+      game.villager2,
+      game.mafia,
+    ]);
     expect(final.detective.phase).toBe("ended");
 
     sendGame(game.hostWs, { type: "new_game" });
@@ -1295,7 +1361,11 @@ describe("player order is join order, always", () => {
     sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
     await drainSnapshots(game);
     sendGame(game.mafia.ws, { type: "lock_action" });
-    const afterNight1 = await drainSnapshots(game);
+    await drainSnapshots(game);
+    // Spec 11: settle the rest (angel/detective confirm, both villagers file
+    // decoys while still alive) so the night resolves and villager2's death
+    // lands.
+    const afterNight1 = await settleNightRemainder(game);
 
     expect(afterNight1.detective.players.map((p) => p.id)).toEqual(expectedOrder);
     expect(afterNight1.detective.game?.players.map((p) => p.id)).toEqual(expectedOrder);
@@ -1414,7 +1484,11 @@ describe("Spec 08: lock_action/unlock_action", () => {
 
     sendGame(game.mafia.ws, { type: "lock_action" });
     const afterLock = await drainSnapshots(game);
-    expect(afterLock.detective.phase).toBe("dawn");
+    // Spec 11: the mafia lock alone no longer ends the night — the angel,
+    // detective, and villagers still owe their confirms/decoys.
+    expect(afterLock.detective.phase).toBe("night");
+    const afterAll = await settleNightRemainder(game);
+    expect(afterAll.detective.phase).toBe("dawn");
 
     game.hostWs.close();
     game.angel.ws.close();
@@ -1424,14 +1498,18 @@ describe("Spec 08: lock_action/unlock_action", () => {
     game.mafia.ws.close();
   });
 
-  test("authority: a non-killer's lock_action/unlock_action is rejected not_lockable", async () => {
+  test("authority: lock/unlock with no pick rejected no_pick_to_lock; host socket not_a_player", async () => {
     const game = await setUpFivePlayerRoom();
     await startScriptedGame(game);
 
+    // Spec 11: a villager now owes a decoy `"watch"`, so they CAN lock — but
+    // with no pick set yet they get `no_pick_to_lock` (not `not_lockable`;
+    // they have a lockable night input now).
     sendGame(game.villager1.ws, { type: "lock_action" });
     const rejection1 = (await nextMessageOfType(game.villager1.ws, "rejection")) as RejectionMessage;
-    expect(rejection1.code).toBe("not_lockable");
+    expect(rejection1.code).toBe("no_pick_to_lock");
 
+    // The angel has submitted nothing yet -> nothing to unlock -> not_lockable.
     sendGame(game.angel.ws, { type: "unlock_action" });
     const rejection2 = (await nextMessageOfType(game.angel.ws, "rejection")) as RejectionMessage;
     expect(rejection2.code).toBe("not_lockable");
@@ -1476,7 +1554,10 @@ describe("Spec 08: lock_action/unlock_action", () => {
     sendGame(game.angel.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
     await drainSnapshots(game);
     sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
-    const afterNight1 = await drainSnapshots(game);
+    await drainSnapshots(game);
+    // Spec 11: settle the angel/detective confirms + villager decoys so the
+    // night actually resolves into dawn.
+    const afterNight1 = await settleNightRemainder(game);
     expect(afterNight1.detective.phase).toBe("dawn");
 
     // Night has already resolved (phase moved to dawn) — a late lock/unlock
@@ -1488,6 +1569,112 @@ describe("Spec 08: lock_action/unlock_action", () => {
     sendGame(game.mafia.ws, { type: "unlock_action" });
     const rejection2 = (await nextMessageOfType(game.mafia.ws, "rejection")) as RejectionMessage;
     expect(rejection2.code).toBe("not_lockable");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+});
+
+describe("Spec 11: set_ruleset / pendingRuleset, confirm_vote, acknowledge", () => {
+  test("set_ruleset (host, lobby) broadcasts pendingRuleset to players; non-host rejected", async () => {
+    const game = await setUpFivePlayerRoom();
+
+    const customRuleset: Ruleset = {
+      ...FIVE_PLAYER_HOUSE_RULES,
+      roles: { villager: "auto", mafia: 2, detective: 1, angel: 0, suicide_bomber: 0, minion: 0 },
+    };
+    sendGame(game.hostWs, { type: "set_ruleset", ruleset: customRuleset });
+    const snap = (await nextMessageOfType(game.villager1.ws, "snapshot")).state;
+    expect(snap.pendingRuleset?.roles.mafia).toBe(2);
+    expect(snap.pendingRuleset?.roles.detective).toBe(1);
+    await Promise.all([
+      nextMessageOfType(game.angel.ws, "snapshot"),
+      nextMessageOfType(game.detective.ws, "snapshot"),
+      nextMessageOfType(game.villager2.ws, "snapshot"),
+      nextMessageOfType(game.hostWs, "snapshot"),
+    ]);
+
+    sendGame(game.villager1.ws, { type: "set_ruleset", ruleset: customRuleset });
+    const rej = (await nextMessageOfType(game.villager1.ws, "rejection")) as RejectionMessage;
+    expect(rej.code).toBe("not_host");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("set_ruleset is rejected once a game is running (not_lobby)", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+    sendGame(game.hostWs, { type: "set_ruleset", ruleset: FIVE_PLAYER_HOUSE_RULES });
+    const rej = (await nextMessageOfType(game.hostWs, "rejection")) as RejectionMessage;
+    expect(rej.code).toBe("not_lobby");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("day vote confirm_vote gates resolution; the projection exposes the voter's own lock state", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+    sendGame(game.hostWs, { type: "force_advance", gen: 0 });
+    const afterNight = await drainSnapshots(game);
+    sendGame(game.hostWs, { type: "force_advance", gen: afterNight.detective.game!.phaseGen });
+    const afterDawn = await drainSnapshots(game);
+    expect(afterDawn.detective.phase).toBe("day");
+
+    let snap = afterDawn;
+    for (const p of [game.angel, game.villager1, game.detective, game.villager2, game.mafia] as const) {
+      sendGame(p.ws, { type: "cast_vote", target: game.mafia.playerId });
+      snap = await drainSnapshots(game);
+    }
+    expect(snap.detective.phase).toBe("day"); // all tentative -> not resolved
+    expect(snap.detective.game?.you?.currentVote).toBe(game.mafia.playerId);
+    expect(snap.detective.game?.you?.dayVoteLocked).toBe(false);
+
+    const final = await voteConfirmAll(game, game.mafia.playerId, [
+      game.angel,
+      game.villager1,
+      game.detective,
+      game.villager2,
+      game.mafia,
+    ]);
+    expect(final.detective.phase).toBe("ended");
+    expect(final.detective.game?.winners).toEqual(["village"]);
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("dawn acknowledge advances once all living ack; a stale-gen ack is a no-op", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+    sendGame(game.hostWs, { type: "force_advance", gen: 0 });
+    const afterNight = await drainSnapshots(game);
+    expect(afterNight.detective.phase).toBe("dawn");
+    const gen = afterNight.detective.game!.phaseGen;
+
+    // Stale-gen ack: no state change, no broadcast.
+    sendGame(game.villager1.ws, { type: "acknowledge", gen: gen + 99 });
+
+    const living = [game.angel, game.villager1, game.detective, game.villager2, game.mafia] as const;
+    const afterAck = await acknowledgeDawn(game, gen, living);
+    expect(afterAck.detective.phase).toBe("day");
 
     game.hostWs.close();
     game.angel.ws.close();

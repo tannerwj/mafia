@@ -42,6 +42,12 @@ async function joinAsPlayer(page: Page, roomCode: string, name: string) {
 async function startGameWithSeed(hostPage: Page, seed: number) {
   await hostPage.evaluate((s) => {
     sessionStorage.setItem("mafia:testSeed", String(s));
+    // Spec 11: the host lobby now has an editable role-count editor whose
+    // default differs from HOUSE_RULES. Stash an empty role override so
+    // Room.handleStartGame sends the exact HOUSE_RULESET shape (mafia auto,
+    // det/angel/bomber 1, villager auto) — keeping every scenario's
+    // seed->role-assignment mapping identical to before the editor existed.
+    sessionStorage.setItem("mafia:testRoles", "{}");
   }, seed);
   await hostPage.getByTestId("start-game").click();
 }
@@ -79,12 +85,48 @@ async function waitForRoleRevealToClose(page: Page) {
   });
 }
 
-async function castDayVote(page: Page, targetName: string) {
-  await page.getByTestId("vote-option").filter({ hasText: targetName }).click();
+// Spec 11: a detective/angel confirms their pick (the individual lock) via
+// `night-confirm-button`, the same shape mafia use with `lock-in-button`.
+async function submitAndConfirmNightTarget(page: Page, targetName: string) {
+  await submitNightTarget(page, targetName);
+  const confirm = page.getByTestId("night-confirm-button");
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
 }
 
-async function castNoMurder(page: Page) {
+// Spec 11: a no-action role (villager/minion/bomber) files the inert decoy
+// "watch" pick + confirm so the night can complete.
+async function settleWatch(page: Page, targetName: string) {
+  const option = page.getByTestId("night-watch-option").filter({ hasText: targetName });
+  await expect(option.first()).toBeVisible();
+  await option.first().click();
+  const confirm = page.getByTestId("night-confirm-button");
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+}
+
+// Spec 11: day vote is select -> confirm.
+async function castAndConfirmDayVote(page: Page, targetName: string) {
+  await page.getByTestId("vote-option").filter({ hasText: targetName }).click();
+  const confirm = page.getByTestId("confirm-vote-button");
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+}
+
+async function castAndConfirmNoMurder(page: Page) {
   await page.getByTestId("vote-option-no-murder").click();
+  const confirm = page.getByTestId("confirm-vote-button");
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+}
+
+// Spec 11: dawn Morning Report is acknowledge-gated — every living player taps
+// Continue. A dead player is on the god view (no button) — skip if absent.
+async function acknowledgeMorning(page: Page) {
+  const button = page.getByTestId("acknowledge-button");
+  if (await button.isVisible().catch(() => false)) {
+    await button.click();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -166,8 +208,12 @@ test.describe("scenario A: mafia converge, angel save, failed-attack dawn messag
     await erin.getByTestId("lock-in-button").click();
     await expect(bob.getByTestId("mafia-consensus")).toHaveAttribute("data-consensus-reached", "true");
 
-    await submitNightTarget(dave, "Carol");
-    await submitNightTarget(alice, "Bob");
+    // Spec 11: the angel & detective confirm their picks; the suicide bomber
+    // (Carol, no real night action) files a decoy "watch" — every living
+    // player performs the same pick→confirm, so the night completes.
+    await submitAndConfirmNightTarget(dave, "Carol");
+    await submitAndConfirmNightTarget(alice, "Bob");
+    await settleWatch(carol, "Alice");
 
     await waitForPhase(alice, "dawn", 25_000);
     await expect(alice.getByTestId("interstitial-lines")).toContainText("attack failed");
@@ -175,16 +221,19 @@ test.describe("scenario A: mafia converge, angel save, failed-attack dawn messag
       await waitForPhase(p, "dawn", 25_000);
     }
 
+    // Spec 11: dawn is acknowledge-gated — every living player taps Continue.
+    for (const p of [alice, bob, carol, dave, erin]) await acknowledgeMorning(p);
+
     await waitForPhase(alice, "day", 25_000);
     for (const p of [bob, carol, dave, erin]) await waitForPhase(p, "day", 25_000);
 
     // Day 1: engineer a 2-2 tie between Bob and Carol (Erin gets the odd
-    // vote out) so the vote goes to a runoff.
-    await castDayVote(alice, "Bob");
-    await castDayVote(dave, "Bob");
-    await castDayVote(carol, "Erin");
-    await castDayVote(erin, "Carol");
-    await castDayVote(bob, "Carol");
+    // vote out) so the vote goes to a runoff. Spec 11: cast + confirm each.
+    await castAndConfirmDayVote(alice, "Bob");
+    await castAndConfirmDayVote(dave, "Bob");
+    await castAndConfirmDayVote(carol, "Erin");
+    await castAndConfirmDayVote(erin, "Carol");
+    await castAndConfirmDayVote(bob, "Carol");
 
     await waitForPhase(alice, "runoff", 25_000);
     for (const p of [bob, carol, dave, erin]) await waitForPhase(p, "runoff", 25_000);
@@ -194,7 +243,7 @@ test.describe("scenario A: mafia converge, angel save, failed-attack dawn messag
 
     // Runoff: everyone votes out Bob (one mafia down; Erin remains).
     for (const p of [alice, bob, carol, dave, erin]) {
-      await castDayVote(p, "Bob");
+      await castAndConfirmDayVote(p, "Bob");
     }
 
     // One mafia down but parity isn't met yet (1 mafia vs 3 others) -> the
@@ -202,17 +251,28 @@ test.describe("scenario A: mafia converge, angel save, failed-attack dawn messag
     await waitForPhase(alice, "night", 25_000);
     await expect(alice.getByTestId("game-screen")).not.toHaveAttribute("data-phase", "ended");
 
-    // Night 2: the remaining mafia (Erin) kills Carol -- no save this time.
-    await submitAndLockMafiaTarget(erin, "Carol");
-    await submitNightTarget(dave, "Alice");
-    await submitNightTarget(alice, "Erin");
+    // Night 1's investigation result (Bob -> mafia) is now in the detective's
+    // PRIVATE findings (Spec 11 2b) — reached via the My Role card, not a dawn
+    // popup or the night drawer.
+    await alice.getByTestId("my-role-button").click();
+    await expect(alice.getByTestId("detective-findings")).toContainText("Mafia");
+    await alice.getByTestId("my-role-dialog-close").click();
 
-    // Night 1's investigation result (Bob -> mafia) resolved at dawn 1 and
-    // now shows in the detective's own waiting-on-submission state.
-    await expect(alice.getByTestId("investigation-history")).toContainText("Mafia");
+    // Night 2: alive = Alice(det), Carol(bomber), Dave(angel), Erin(mafia).
+    // The remaining mafia (Erin) kills Carol -- no save this time. Dave
+    // protects Alice + confirms; Alice investigates Erin + confirms; Carol is
+    // still ALIVE at submission time and owes a decoy watch too (she dies when
+    // the night resolves).
+    await submitAndLockMafiaTarget(erin, "Carol");
+    await submitAndConfirmNightTarget(dave, "Alice");
+    await submitAndConfirmNightTarget(alice, "Erin");
+    await settleWatch(carol, "Alice");
 
     await waitForPhase(alice, "dawn", 25_000);
     await expect(alice.getByTestId("interstitial-lines")).toContainText("Carol");
+
+    // Ack the morning report (Alice, Dave, Erin alive; Carol is on god view).
+    for (const p of [alice, dave, erin]) await acknowledgeMorning(p);
 
     await waitForPhase(alice, "day", 25_000);
     for (const p of [dave, erin]) await waitForPhase(p, "day", 25_000);
@@ -223,9 +283,9 @@ test.describe("scenario A: mafia converge, angel save, failed-attack dawn messag
 
     // Day 2: the surviving village votes out Erin (the last mafia) ->
     // mafia count hits zero -> village wins.
-    await castDayVote(alice, "Erin");
-    await castDayVote(dave, "Erin");
-    await castNoMurder(erin);
+    await castAndConfirmDayVote(alice, "Erin");
+    await castAndConfirmDayVote(dave, "Erin");
+    await castAndConfirmNoMurder(erin);
 
     await waitForPhase(alice, "ended", 25_000);
     for (const p of [dave, erin]) await waitForPhase(p, "ended", 25_000);
@@ -303,22 +363,28 @@ test.describe("scenario B: suicide-bomber loss variant", () => {
     await submitNightTarget(erin, "Dave");
     await expect(erin.getByTestId("lock-in-button")).toBeEnabled();
     await erin.getByTestId("lock-in-button").click();
-    await submitNightTarget(carol, "Dave");
-    await submitNightTarget(dave, "Alice");
+    // Spec 11: angel + detective confirm; the bomber (Bob, no real action)
+    // files a decoy watch — every living player pick→confirms.
+    await submitAndConfirmNightTarget(carol, "Dave");
+    await submitAndConfirmNightTarget(dave, "Alice");
+    await settleWatch(bob, "Alice");
 
     await waitForPhase(alice, "dawn", 25_000);
     await expect(alice.getByTestId("interstitial-lines")).toContainText("attack failed");
+
+    for (const p of [alice, bob, carol, dave, erin]) await acknowledgeMorning(p);
 
     await waitForPhase(alice, "day", 25_000);
     for (const p of [bob, carol, dave, erin]) await waitForPhase(p, "day", 25_000);
 
     // Day 1: the full village (everyone survived night 1) votes out Bob --
     // from every other player's point of view he's just another suspect.
-    await castDayVote(alice, "Bob");
-    await castDayVote(bob, "Bob");
-    await castDayVote(carol, "Bob");
-    await castDayVote(dave, "Bob");
-    await castDayVote(erin, "Bob");
+    // Spec 11: cast + confirm each.
+    await castAndConfirmDayVote(alice, "Bob");
+    await castAndConfirmDayVote(bob, "Bob");
+    await castAndConfirmDayVote(carol, "Bob");
+    await castAndConfirmDayVote(dave, "Bob");
+    await castAndConfirmDayVote(erin, "Bob");
 
     await waitForPhase(alice, "ended", 25_000);
     for (const p of [carol, erin]) await waitForPhase(p, "ended", 25_000);
@@ -396,51 +462,62 @@ test.describe("scenario C: village-win variant", () => {
     await submitNightTarget(bob, "Dave");
     await expect(bob.getByTestId("lock-in-button")).toBeEnabled();
     await bob.getByTestId("lock-in-button").click();
-    await submitNightTarget(erin, "Dave");
-    await submitNightTarget(carol, "Alice");
+    // Spec 11: angel + detective confirm; the bomber (Dave) files a decoy
+    // watch — the "idle town sleeps" state is GONE, every living player now
+    // performs the same pick→confirm (this is the flip of the old idle
+    // assertion the spec's test list calls out).
+    await submitAndConfirmNightTarget(erin, "Dave");
+    await submitAndConfirmNightTarget(carol, "Alice");
+    await settleWatch(dave, "Alice");
 
     await waitForPhase(alice, "dawn", 25_000);
     await expect(alice.getByTestId("interstitial-lines")).toContainText("attack failed");
+
+    for (const p of [alice, bob, carol, dave, erin]) await acknowledgeMorning(p);
 
     await waitForPhase(alice, "day", 25_000);
     for (const p of [bob, carol, dave, erin]) await waitForPhase(p, "day", 25_000);
 
     // Day 1: everyone survived night 1. Vote out Alice (one mafia down, one
-    // to go -- 1 mafia vs 3 others, not parity).
-    await castDayVote(bob, "Alice");
-    await castDayVote(carol, "Alice");
-    await castDayVote(dave, "Alice");
-    await castDayVote(erin, "Alice");
-    await castNoMurder(alice);
+    // to go -- 1 mafia vs 3 others, not parity). Spec 11: cast + confirm.
+    await castAndConfirmDayVote(bob, "Alice");
+    await castAndConfirmDayVote(carol, "Alice");
+    await castAndConfirmDayVote(dave, "Alice");
+    await castAndConfirmDayVote(erin, "Alice");
+    await castAndConfirmNoMurder(alice);
 
     // One mafia down, still not ended (1 mafia vs 3 others).
     await waitForPhase(carol, "night", 25_000);
     await expect(carol.getByTestId("game-screen")).not.toHaveAttribute("data-phase", "ended");
 
-    // Night 1's investigation result (Alice -> mafia) resolved at dawn 1 and
-    // now shows in the detective's own waiting-on-submission state, once she
-    // has a pending night-2 action to be waiting on.
-    await submitNightTarget(carol, "Bob");
-    await expect(carol.getByTestId("investigation-history")).toContainText("Mafia");
+    // Night 1's investigation result (Alice -> mafia) is now in the detective's
+    // PRIVATE findings via the My Role card (Spec 11 2b), not the night drawer.
+    await carol.getByTestId("my-role-button").click();
+    await expect(carol.getByTestId("detective-findings")).toContainText("Mafia");
+    await carol.getByTestId("my-role-dialog-close").click();
 
     // Night 2: remaining mafia (Bob) targets Carol; angel (Erin) protects
-    // Carol this time -> the attack fails. Dave (suicide_bomber) has no
-    // night action -- idle "town sleeps" state, nothing to submit.
+    // Carol -> the attack fails. Detective (Carol) investigates Bob + confirms;
+    // Dave (suicide_bomber) files a decoy watch (same shape as everyone else).
     await submitAndLockMafiaTarget(bob, "Carol");
-    await submitNightTarget(erin, "Carol");
+    await submitAndConfirmNightTarget(erin, "Carol");
+    await submitAndConfirmNightTarget(carol, "Bob");
+    await settleWatch(dave, "Bob");
 
     await waitForPhase(carol, "dawn", 25_000);
     await expect(carol.getByTestId("interstitial-lines")).toContainText("attack failed");
+
+    for (const p of [bob, carol, dave, erin]) await acknowledgeMorning(p);
 
     await waitForPhase(carol, "day", 25_000);
     for (const p of [bob, dave, erin]) await waitForPhase(p, "day", 25_000);
 
     // Day 2: alive = Bob, Carol, Dave, Erin. Vote out Bob -> mafia count
-    // zero -> village wins.
-    await castDayVote(carol, "Bob");
-    await castDayVote(dave, "Bob");
-    await castDayVote(erin, "Bob");
-    await castNoMurder(bob);
+    // zero -> village wins. Spec 11: cast + confirm.
+    await castAndConfirmDayVote(carol, "Bob");
+    await castAndConfirmDayVote(dave, "Bob");
+    await castAndConfirmDayVote(erin, "Bob");
+    await castAndConfirmNoMurder(bob);
 
     await waitForPhase(carol, "ended", 25_000);
     for (const p of [bob, dave, erin]) await waitForPhase(p, "ended", 25_000);

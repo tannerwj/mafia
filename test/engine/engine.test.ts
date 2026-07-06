@@ -14,15 +14,63 @@ const start = (n: number, ruleset: Ruleset, seed: number, now = NOW) => startGam
 const byRole = (state: GameState, roleId: string) => state.players.find((p) => p.roleId === roleId)!;
 const living = (state: GameState) => state.players.filter((p) => p.alive);
 const force = (state: GameState) => applyCommand(state, { type: "forceAdvance", byHost: true, gen: state.phaseGen }).state;
+// Spec 11: every living non-absent, non-mafia player owes an individual night
+// input now (real action or the inert decoy "watch"). This helper settles all
+// of them — for anyone who hasn't already submitted, it picks a live decoy
+// target and locks; for anyone who submitted but hasn't locked, it locks. It
+// leaves the mafia-consensus vote to the caller (mafia readiness is a separate
+// gate). Use it in tests that only drove the "real" actors but still expect
+// the night to resolve naturally.
+const settleDecoys = (state: GameState, exclude: string[] = []) => {
+  let s = state;
+  // A player is a mafia-consensus killer this night (settled by the caller,
+  // not here) iff their role kills AND the kill isn't suppressed on a
+  // firstNightKill=false night 1. On such a night 1 the mafia falls through to
+  // the decoy and IS settled here.
+  const killsThisNight = (roleId: string) =>
+    (roleId === "mafia" || roleId === "godfather") && !(s.ruleset.firstNightKill === false && s.day === 1);
+  for (const p of s.players) {
+    if (!p.alive || p.absent || exclude.includes(p.id)) continue;
+    if (killsThisNight(p.roleId)) continue; // mafia consensus is the caller's job
+    const existing = s.nightActions.find((a) => a.actorId === p.id);
+    if (!existing) {
+      const target = s.players.find((q) => q.alive && q.id !== p.id);
+      const sub = applyCommand(s, { type: "submitAction", playerId: p.id, targetId: target ? target.id : null });
+      // A role with no legal individual input in this phase (rejected) is
+      // skipped — it isn't part of the readiness set.
+      if (!sub.rejection) s = sub.state;
+      else continue;
+    }
+    if (s.phase === "night") {
+      const lock = applyCommand(s, { type: "lockAction", playerId: p.id });
+      if (!lock.rejection) s = lock.state;
+    }
+  }
+  return s;
+};
+// Spec 11: cast + confirm a single day vote (the confirm is what makes it
+// count on a forced/timer resolution — an unconfirmed vote abstains).
+const castConfirm = (state: GameState, playerId: string, target: string) => {
+  let s = applyCommand(state, { type: "castVote", playerId, target }).state;
+  s = applyCommand(s, { type: "confirmVote", playerId }).state;
+  return s;
+};
 const toDay = (state: GameState) => {
   let s = state;
   if (s.phase === "night") s = force(s);
   if (s.phase === "dawn") s = force(s);
   return s;
 };
+// Spec 11: a day vote now needs cast + confirm from every living player before
+// the phase resolves naturally.
 const voteOut = (state: GameState, targetId: string) => {
   let s = state;
-  for (const p of living(s)) s = applyCommand(s, { type: "castVote", playerId: p.id, target: targetId }).state;
+  for (const p of living(s)) {
+    s = applyCommand(s, { type: "castVote", playerId: p.id, target: targetId }).state;
+    if (s.phase === "day" || s.phase === "runoff") {
+      s = applyCommand(s, { type: "confirmVote", playerId: p.id }).state;
+    }
+  }
   return s;
 };
 
@@ -51,12 +99,16 @@ describe("engine core", () => {
     const detective = byRole(s, "detective");
     const target = s.players.find((p) => p.id !== mafia.id && p.id !== angel.id && p.id !== detective.id)!;
     s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: target.id }).state;
-    // Spec 08: the night's mafia-kill readiness gate is now "locked", not
-    // "submitted" — the sole killer must lock in before the night can
-    // resolve naturally.
+    // Spec 08: the night's mafia-kill readiness gate is "locked", not
+    // "submitted". Spec 11: individual actors (angel, detective) confirm
+    // (lock) too, and the villagers owe a decoy — settleDecoys drives all
+    // remaining living non-mafia inputs so the night resolves naturally.
     s = applyCommand(s, { type: "lockAction", playerId: mafia.id }).state;
     s = applyCommand(s, { type: "submitAction", playerId: angel.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: angel.id }).state;
     s = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: mafia.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: detective.id }).state;
+    s = settleDecoys(s);
     expect(s.phase).toBe("dawn");
     expect(s.players.find((p) => p.id === target.id)?.alive).toBe(true);
     expect(s.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", outcome: "failed" }));
@@ -83,7 +135,10 @@ describe("engine core", () => {
 
   test("plurality abstentions do not beat a single vote and no votes kill nobody", () => {
     let s = toDay(start(5, rules({ mafia: 1, villager: 4 }, { firstNightKill: false }), 5));
+    // Spec 11: force resolves from LOCKED votes only — the single voter must
+    // confirm for their vote to count; the rest abstain.
     s = applyCommand(s, { type: "castVote", playerId: living(s)[0]!.id, target: living(s)[1]!.id }).state;
+    s = applyCommand(s, { type: "confirmVote", playerId: living(s)[0]!.id }).state;
     s = force(s);
     expect(s.deaths.at(-1)?.cause).toBe("vote");
     let t = toDay(start(5, rules({ mafia: 1, villager: 4 }, { firstNightKill: false }), 5));
@@ -95,7 +150,9 @@ describe("engine core", () => {
     let s = toDay(start(5, rules({ mafia: 1, villager: 4 }, { firstNightKill: false, dayVoteThreshold: "majority" }), 3));
     const target = living(s)[0]!.id;
     s = applyCommand(s, { type: "castVote", playerId: living(s)[1]!.id, target }).state;
+    s = applyCommand(s, { type: "confirmVote", playerId: living(s)[1]!.id }).state;
     s = applyCommand(s, { type: "castVote", playerId: living(s)[2]!.id, target }).state;
+    s = applyCommand(s, { type: "confirmVote", playerId: living(s)[2]!.id }).state;
     s = force(s);
     expect(s.deaths).toHaveLength(0);
   });
@@ -103,18 +160,18 @@ describe("engine core", () => {
   test("runoff pins exclude no_murder and tied runoff resolves to peace", () => {
     let s = toDay(start(5, rules({ mafia: 1, villager: 4 }, { firstNightKill: false }), 7));
     const ids = living(s).map((p) => p.id);
-    s = applyCommand(s, { type: "castVote", playerId: ids[0]!, target: ids[1]! }).state;
-    s = applyCommand(s, { type: "castVote", playerId: ids[2]!, target: ids[3]! }).state;
+    s = castConfirm(s, ids[0]!, ids[1]!);
+    s = castConfirm(s, ids[2]!, ids[3]!);
     s = force(s);
     expect(s.phase).toBe("runoff");
-    s = applyCommand(s, { type: "castVote", playerId: ids[0]!, target: ids[1]! }).state;
-    s = applyCommand(s, { type: "castVote", playerId: ids[2]!, target: ids[3]! }).state;
+    s = castConfirm(s, ids[0]!, ids[1]!);
+    s = castConfirm(s, ids[2]!, ids[3]!);
     s = force(s);
     expect(s.deaths).toHaveLength(0);
     let t = toDay(start(5, rules({ mafia: 1, villager: 4 }, { firstNightKill: false }), 7));
     const tid = living(t).map((p) => p.id);
-    t = applyCommand(t, { type: "castVote", playerId: tid[0]!, target: tid[1]! }).state;
-    t = applyCommand(t, { type: "castVote", playerId: tid[2]!, target: "no_murder" }).state;
+    t = castConfirm(t, tid[0]!, tid[1]!);
+    t = castConfirm(t, tid[2]!, "no_murder");
     t = force(t);
     expect(t.phase).toBe("dusk");
     expect(t.deaths).toHaveLength(0);
@@ -124,8 +181,8 @@ describe("engine core", () => {
     const base = () => toDay(start(5, rules({ mafia: 1, villager: 4 }, { firstNightKill: false, tiePolicy: "random" }), 7));
     const tied = (state: GameState) => {
       const ids = living(state).map((p) => p.id);
-      let s = applyCommand(state, { type: "castVote", playerId: ids[0]!, target: ids[1]! }).state;
-      s = applyCommand(s, { type: "castVote", playerId: ids[2]!, target: ids[3]! }).state;
+      let s = castConfirm(state, ids[0]!, ids[1]!);
+      s = castConfirm(s, ids[2]!, ids[3]!);
       return force(s);
     };
     expect(tied(base())).toEqual(tied(base()));
@@ -166,6 +223,9 @@ describe("engine core", () => {
     t = applyCommand(t, { type: "markAbsent", byHost: true, playerId: tm[1]!.id }).state;
     t = applyCommand(t, { type: "submitAction", playerId: tm[0]!.id, targetId: t.players.find((p) => p.roleId !== "mafia")!.id }).state;
     t = applyCommand(t, { type: "lockAction", playerId: tm[0]!.id }).state;
+    // Spec 11: the villagers still owe their decoy locks for the night to
+    // resolve naturally.
+    t = settleDecoys(t);
     expect(t.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", outcome: "landed" }));
 
     // Majority mode: both killers submit and lock -> natural resolution.
@@ -176,6 +236,7 @@ describe("engine core", () => {
     majority = applyCommand(majority, { type: "lockAction", playerId: mm[0]!.id }).state;
     majority = applyCommand(majority, { type: "submitAction", playerId: mm[1]!.id, targetId: mt.id }).state;
     majority = applyCommand(majority, { type: "lockAction", playerId: mm[1]!.id }).state;
+    majority = settleDecoys(majority);
     expect(majority.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", targetId: mt.id }));
 
     // Designated mode: only the designated (lowest-seat) killer's lock
@@ -185,6 +246,7 @@ describe("engine core", () => {
     const dt = designated.players.find((p) => p.roleId !== "mafia")!;
     designated = applyCommand(designated, { type: "submitAction", playerId: dm[0]!.id, targetId: dt.id }).state;
     designated = applyCommand(designated, { type: "lockAction", playerId: dm[0]!.id }).state;
+    designated = settleDecoys(designated);
     expect(designated.phase).not.toBe("night");
   });
 
@@ -305,10 +367,20 @@ describe("engine core", () => {
     const angel = byRole(s, "angel");
     const detective = byRole(s, "detective");
     const target = s.players.find((p) => p.id !== mafia.id && p.id !== angel.id && p.id !== detective.id)!;
+    // Spec 11: the mafia-kill is unavailable on a firstNightKill=false night 1
+    // — so the mafia's night input falls through to the inert decoy `"watch"`
+    // (they are no longer a mafia-consensus killer this night, so
+    // `canSubmitMafiaVote` is false). A submitted target therefore files a
+    // harmless watch (no rejection) and NO kill is attempted.
     const mafiaAttempt = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: target.id });
-    expect(mafiaAttempt.rejection?.code).toBe("not_your_phase");
+    expect(mafiaAttempt.rejection).toBeUndefined();
+    s = mafiaAttempt.state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia.id }).state;
     s = applyCommand(s, { type: "submitAction", playerId: angel.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: angel.id }).state;
     s = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: mafia.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: detective.id }).state;
+    s = settleDecoys(s); // the two villagers also owe decoys
     expect(s.phase).toBe("dawn");
     expect(s.log.some((e) => e.type === "attackAttempted")).toBe(false);
     expect(projectFor(s, { kind: "player", id: detective.id }).you?.investigationResults?.[0]).toMatchObject({ targetId: mafia.id, isMafia: true });
@@ -366,6 +438,11 @@ describe("engine core", () => {
     let s = start(3, rules({ detective: 1, mafia: 1, villager: 1 }, { firstNightKill: false }), 6);
     const detective = byRole(s, "detective");
     expect(s.phase).toBe("night");
+    // Spec 11: every living player owes a night input, so settle everyone
+    // EXCEPT the detective first — leaving the detective as the sole pending
+    // actor. Marking them absent removes the last pending input -> dawn.
+    s = settleDecoys(s, [detective.id]);
+    expect(s.phase).toBe("night");
     s = applyCommand(s, { type: "markAbsent", byHost: true, playerId: detective.id }).state;
     expect(s.phase).toBe("dawn");
   });
@@ -396,26 +473,42 @@ describe("engine core", () => {
     const villagers = s.players.filter((p) => p.roleId === "villager");
     expect(s.phase).toBe("night");
 
-    // Last night action submitted by a player (not the host) completes the
-    // night and transitions into dawn. Spec 08: the sole killer must LOCK
-    // (not just submit) for the phase to become ready, so the lock is the
-    // final player-triggered completion here.
+    // Spec 11: every living player owes a night input, so drive them all —
+    // mafia (submit+lock), detective (submit+lock), villagers[0] (decoy via
+    // settleDecoys). villagers[1]'s decoy lock is the LAST player-triggered
+    // completion into dawn, and it must arm the beat deadline (the regression
+    // guard: a player's own final action, not just the host's forceAdvance,
+    // carries `now`).
     s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: villagers[0]!.id, now: NOW + 10 }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia.id, now: NOW + 10 }).state;
     s = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: mafia.id, now: NOW + 10 }).state;
-    const lockResult = applyCommand(s, { type: "lockAction", playerId: mafia.id, now: NOW + 10 });
+    s = applyCommand(s, { type: "lockAction", playerId: detective.id, now: NOW + 10 }).state;
+    s = settleDecoys(s, [villagers[1]!.id]);
+    expect(s.phase).toBe("night"); // villagers[1] still owes their decoy
+    s = applyCommand(s, { type: "submitAction", playerId: villagers[1]!.id, targetId: mafia.id, now: NOW + 10 }).state;
+    const lockResult = applyCommand(s, { type: "lockAction", playerId: villagers[1]!.id, now: NOW + 10 });
     s = lockResult.state;
     expect(s.phase).toBe("dawn");
     expect(s.deadlineAt).toBe(NOW + 10 + 4242);
     expect(lockResult.effects).toContainEqual({ type: "setDeadline", at: NOW + 10 + 4242 });
 
-    s = force(s); // dawn -> day (untimed by default in these tests)
+    // dawn is acknowledge-gated (Spec 11) — the last living ack transitions
+    // into day and must likewise arm nothing new (day is untimed here). Drive
+    // the acks then force any remainder is unnecessary; ack them all.
+    const livingDawn = living(s);
+    for (const p of livingDawn) {
+      s = applyCommand(s, { type: "acknowledge", playerId: p.id, gen: s.phaseGen, now: NOW + 15 }).state;
+    }
+    expect(s.phase).toBe("day");
 
-    // Last day vote cast by a player completes the vote and transitions
-    // into dusk.
+    // Last day vote CONFIRMED by a player completes the vote and transitions
+    // into dusk (Spec 11: confirm, not just cast, is the completion).
     const alive = living(s);
     let voteResult = applyCommand(s, { type: "castVote", playerId: alive[0]!.id, target: "no_murder", now: NOW + 20 });
+    voteResult = applyCommand(voteResult.state, { type: "confirmVote", playerId: alive[0]!.id, now: NOW + 20 });
     for (const p of alive.slice(1)) {
       voteResult = applyCommand(voteResult.state, { type: "castVote", playerId: p.id, target: "no_murder", now: NOW + 20 });
+      voteResult = applyCommand(voteResult.state, { type: "confirmVote", playerId: p.id, now: NOW + 20 });
     }
     s = voteResult.state;
     expect(s.phase).toBe("dusk");
@@ -445,7 +538,10 @@ describe("engine core", () => {
     s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: target.id }).state;
     s = applyCommand(s, { type: "lockAction", playerId: mafia.id }).state;
     s = applyCommand(s, { type: "submitAction", playerId: angel.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: angel.id }).state;
     s = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: mafia.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: detective.id }).state;
+    s = settleDecoys(s); // the two villagers owe decoys
     expect(s.phase).toBe("dawn");
     expectJoinOrder(s, { kind: "player", id: villager.id });
     s = force(s);
@@ -515,19 +611,26 @@ describe("engine core", () => {
 
     const seatIn = (view: ReturnType<typeof projectFor>, id: string) => view.players.find((p) => p.id === id);
 
-    // Actor (detective) hasn't submitted yet: host sees acted === false.
+    // Actor (detective) hasn't confirmed yet: host sees acted === false.
+    // Spec 11: an individual actor now counts as `acted` only once LOCKED
+    // (uniform with mafia), so a bare submit stays `false`.
     let hostView = projectFor(s, { kind: "host" });
     expect(seatIn(hostView, detective.id)?.acted).toBe(false);
 
-    // Villager is not an actor this phase: undefined, never a fabricated false.
-    const villagerSeat = seatIn(hostView, villager.id);
-    expect("acted" in (villagerSeat ?? {}) ? villagerSeat!.acted : undefined).toBeUndefined();
+    // Spec 11: the villager now owes a decoy `"watch"` input too — so the host
+    // sees `acted: false` (pending), not undefined. Every living seat owes a
+    // night input now; no seat is "asleep".
+    expect(seatIn(hostView, villager.id)?.acted).toBe(false);
 
     // Mafia consensus participant also starts false (owes the kill-vote).
     expect(seatIn(hostView, mafia.id)?.acted).toBe(false);
 
-    // Detective submits -> host sees acted flip to true.
+    // Detective submits but does NOT lock -> still false (Spec 11 uniform).
     s = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: villager.id }).state;
+    hostView = projectFor(s, { kind: "host" });
+    expect(seatIn(hostView, detective.id)?.acted).toBe(false);
+    // Detective locks -> acted flips true.
+    s = applyCommand(s, { type: "lockAction", playerId: detective.id }).state;
     hostView = projectFor(s, { kind: "host" });
     expect(seatIn(hostView, detective.id)?.acted).toBe(true);
     // Mafia hasn't voted yet: still false.
@@ -583,6 +686,9 @@ describe("engine core", () => {
     expect(s.phase).toBe("night");
     s = applyCommand(s, { type: "submitAction", playerId: mafia[1]!.id, targetId: target.id }).state;
     s = applyCommand(s, { type: "lockAction", playerId: mafia[1]!.id }).state;
+    // Spec 11: mafia consensus is met, but the 5 villagers still owe decoys.
+    expect(s.phase).toBe("night");
+    s = settleDecoys(s);
     expect(s.phase).toBe("dawn");
     expect(s.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", targetId: target.id, outcome: "landed" }));
   });
@@ -612,6 +718,7 @@ describe("engine core", () => {
     expect(s.phase).toBe("night"); // mafia[2] hasn't locked yet
     s = applyCommand(s, { type: "submitAction", playerId: mafia[2]!.id, targetId: villagers[1]!.id }).state;
     s = applyCommand(s, { type: "lockAction", playerId: mafia[2]!.id }).state;
+    s = settleDecoys(s); // 6 villagers owe decoys
     expect(s.phase).toBe("dawn");
     // 2 of 3 locked on villagers[0] -> plurality wins, not villagers[1].
     expect(s.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", targetId: villagers[0]!.id, outcome: "landed" }));
@@ -650,6 +757,8 @@ describe("engine core", () => {
     s = applyCommand(s, { type: "submitAction", playerId: mafia[0]!.id, targetId: target.id }).state;
     s = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id }).state;
     expect(s.phase).toBe("night"); // mafia[1] hasn't acted at all
+    s = settleDecoys(s); // 5 villagers owe decoys
+    expect(s.phase).toBe("night"); // still blocked on the unlocked mafia[1]
     s = applyCommand(s, { type: "markAbsent", byHost: true, playerId: mafia[1]!.id }).state;
     expect(s.phase).toBe("dawn");
     expect(s.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", targetId: target.id, outcome: "landed" }));
@@ -663,6 +772,7 @@ describe("engine core", () => {
     s = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id }).state;
     s = applyCommand(s, { type: "submitAction", playerId: mafia[1]!.id, targetId: target.id }).state;
     s = applyCommand(s, { type: "lockAction", playerId: mafia[1]!.id }).state;
+    s = settleDecoys(s); // Spec 11: villagers owe decoys
     expect(s.phase).toBe("dawn"); // resolved
 
     // Re-run the same script but unlock mafia[1] right before what would
@@ -674,6 +784,7 @@ describe("engine core", () => {
     t = applyCommand(t, { type: "lockAction", playerId: tMafia[0]!.id }).state;
     t = applyCommand(t, { type: "submitAction", playerId: tMafia[1]!.id, targetId: tTarget.id }).state;
     t = applyCommand(t, { type: "lockAction", playerId: tMafia[1]!.id }).state;
+    t = settleDecoys(t);
     expect(t.phase).toBe("dawn");
     // Can't unlock post-resolution (phase gate) — prove unlock genuinely
     // re-opens readiness by unlocking BEFORE the second lock instead.
@@ -685,6 +796,7 @@ describe("engine core", () => {
     u = applyCommand(u, { type: "unlockAction", playerId: uMafia[0]!.id }).state;
     u = applyCommand(u, { type: "submitAction", playerId: uMafia[1]!.id, targetId: uTarget.id }).state;
     u = applyCommand(u, { type: "lockAction", playerId: uMafia[1]!.id }).state;
+    u = settleDecoys(u); // villagers locked, so mafia is the only blocker
     // mafia[0] unlocked itself -> only 1 of 2 locked -> still pending.
     expect(u.phase).toBe("night");
     u = applyCommand(u, { type: "lockAction", playerId: uMafia[0]!.id }).state;
@@ -699,6 +811,7 @@ describe("engine core", () => {
     s = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id }).state;
     s = applyCommand(s, { type: "submitAction", playerId: mafia[1]!.id, targetId: villagers[0]!.id }).state;
     s = applyCommand(s, { type: "lockAction", playerId: mafia[1]!.id }).state;
+    s = settleDecoys(s); // villagers owe decoys
     expect(s.phase).toBe("dawn"); // sanity: this script does resolve if uninterrupted
 
     // Same script, but mafia[0] changes their target AFTER locking, right
@@ -728,6 +841,7 @@ describe("engine core", () => {
     expect(s.phase).toBe("night"); // designated killer hasn't locked yet
     s = applyCommand(s, { type: "submitAction", playerId: dm[0]!.id, targetId: target.id }).state;
     s = applyCommand(s, { type: "lockAction", playerId: dm[0]!.id }).state;
+    s = settleDecoys(s); // 4 villagers owe decoys
     expect(s.phase).toBe("dawn");
     expect(s.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", targetId: target.id, outcome: "landed" }));
   });
@@ -741,9 +855,12 @@ describe("engine core", () => {
     const noPick = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id });
     expect(noPick.rejection?.code).toBe("no_pick_to_lock");
 
-    // Non-killer (villager) can never lock -> not_lockable.
-    const notKiller = applyCommand(s, { type: "lockAction", playerId: villager.id });
-    expect(notKiller.rejection?.code).toBe("not_lockable");
+    // Spec 11: a villager now owes a decoy `"watch"`, so with no pick set yet
+    // they also get `no_pick_to_lock` (not `not_lockable` — they DO have a
+    // lockable night input now, just no pick). A genuinely un-lockable seat
+    // (dead/absent) is gated upstream in applyCommand before reaching here.
+    const villagerNoPick = applyCommand(s, { type: "lockAction", playerId: villager.id });
+    expect(villagerNoPick.rejection?.code).toBe("no_pick_to_lock");
 
     // Resolve the night fully, then attempt to lock/unlock post-resolution
     // -> not_lockable (phase-gated before role-gated), never silently
@@ -753,6 +870,7 @@ describe("engine core", () => {
     s = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id }).state;
     s = applyCommand(s, { type: "submitAction", playerId: mafia[1]!.id, targetId: target.id }).state;
     s = applyCommand(s, { type: "lockAction", playerId: mafia[1]!.id }).state;
+    s = settleDecoys(s); // villagers owe decoys
     expect(s.phase).toBe("dawn");
     const postResolutionLock = applyCommand(s, { type: "lockAction", playerId: mafia[0]!.id });
     expect(postResolutionLock.rejection?.code).toBe("not_lockable");
@@ -787,10 +905,9 @@ describe("engine core", () => {
     expect(view.you?.consensusReached).toBe(false); // mafia[1] hasn't locked
 
     s = applyCommand(s, { type: "lockAction", playerId: mafia[1]!.id }).state;
-    // Night has resolved by now (phase advanced to dawn) — re-derive a
-    // mid-night-shaped view directly from a hand-built state to check the
-    // projection's own field shape independent of phase gating (the
-    // `you.factionVotes` block is only populated `state.phase === "night"`).
+    // Spec 11: mafia consensus is met but the 5 villagers still owe decoys.
+    expect(s.phase).toBe("night");
+    s = settleDecoys(s);
     expect(s.phase).toBe("dawn");
   });
 
@@ -808,5 +925,184 @@ describe("engine core", () => {
     const deadState = { ...s, players: s.players.map((p) => (p.id === mafia[0]!.id ? { ...p, alive: false } : p)) };
     const deadMafiaView = projectFor(deadState, { kind: "player", id: mafia[0]!.id });
     expect(deadMafiaView.you?.factionVotes).toBeUndefined();
+  });
+
+  // ---------------------------------------------------------------------
+  // Spec 11 — uniform interaction: day-vote confirm, decoy night actions,
+  // morning-report acknowledge, no-count-leak.
+  // ---------------------------------------------------------------------
+
+  test("day vote: all-tentative (cast, not confirmed) does NOT resolve; all-confirmed does", () => {
+    // 5 players so a single elimination doesn't end the game — we want to
+    // observe the dawn/dusk transition, not a win.
+    let s = toDay(start(5, rules({ mafia: 1, villager: 4 }, { firstNightKill: false }), 5));
+    const ids = living(s).map((p) => p.id);
+    // Everyone casts the same target but NOBODY confirms -> phase stays open
+    // (the redefined pendingVotes counts unlocked voters — a stray all-
+    // tentative table must not resolve early).
+    for (const id of ids) s = applyCommand(s, { type: "castVote", playerId: id, target: ids[1]! }).state;
+    expect(s.phase).toBe("day");
+    // Confirm each -> the last confirmation resolves the vote naturally.
+    for (const id of ids) s = applyCommand(s, { type: "confirmVote", playerId: id }).state;
+    expect(s.phase).toBe("dusk");
+    expect(s.deaths.filter((d) => d.cause === "vote")).toHaveLength(1);
+  });
+
+  test("day vote: untimed day with unconfirmed voters does NOT hang and does NOT resolve early — host force resolves from locked only", () => {
+    let s = toDay(start(5, rules({ mafia: 1, villager: 4 }, { firstNightKill: false }), 5));
+    // Target a villager so a single elimination doesn't end the game (we want
+    // to observe the dusk transition + the locked-only resolution).
+    const victim = living(s).find((p) => p.roleId === "villager")!.id;
+    const others = living(s).filter((p) => p.id !== victim).map((p) => p.id);
+    // Two players confirm on the villager; a third leaves a tentative pick.
+    s = castConfirm(s, others[0]!, victim);
+    s = castConfirm(s, others[1]!, victim);
+    s = applyCommand(s, { type: "castVote", playerId: others[2]!, target: others[3]! }).state; // tentative
+    // No timer, not everyone locked -> the phase must NOT auto-resolve.
+    expect(s.phase).toBe("day");
+    // Host force-advances: resolve from LOCKED votes only (the 2 confirmed on
+    // the villager win; the tentative one abstains).
+    s = force(s);
+    expect(s.phase).toBe("dusk");
+    expect(s.deaths.at(-1)?.playerId).toBe(victim);
+  });
+
+  test("night decoy: a villager's watch pick is inert (no visit, no death, no attack)", () => {
+    let s = start(3, rules({ mafia: 1, villager: 2 }, { firstNightKill: false }), 5);
+    const villagers = s.players.filter((p) => p.roleId === "villager");
+    const mafia = byRole(s, "mafia");
+    // A villager "watches" the mafia — this must create no observable effect.
+    s = applyCommand(s, { type: "submitAction", playerId: villagers[0]!.id, targetId: mafia.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: villagers[0]!.id }).state;
+    s = settleDecoys(s);
+    expect(s.phase).toBe("dawn");
+    expect(s.log.some((e) => e.type === "attackAttempted")).toBe(false);
+    expect(s.deaths).toHaveLength(0);
+    expect(s.players.every((p) => p.alive)).toBe(true);
+  });
+
+  test("night decoy: a watch target is ABSENT from every non-host projection, present for the host", () => {
+    let s = start(3, rules({ mafia: 1, villager: 2 }, { firstNightKill: false }), 5);
+    const villagers = s.players.filter((p) => p.roleId === "villager");
+    const mafia = byRole(s, "mafia");
+    const watcher = villagers[0]!;
+    const watched = mafia.id;
+    s = applyCommand(s, { type: "submitAction", playerId: watcher.id, targetId: watched }).state;
+
+    // The watcher's OWN view may reflect their own pick (that's not a leak).
+    expect(projectFor(s, { kind: "player", id: watcher.id }).you?.pendingAction?.targetId).toBe(watched);
+    expect(projectFor(s, { kind: "player", id: watcher.id }).you?.nightIsDecoy).toBe(true);
+
+    // Every OTHER non-host viewer must not learn who the watcher watched.
+    for (const viewer of [villagers[1]!.id, mafia.id]) {
+      const view = projectFor(s, { kind: "player", id: viewer });
+      // No actionSubmitted event carrying the watch target reaches a player.
+      expect(view.log.some((e) => e.type === "actionSubmitted")).toBe(false);
+      expect(JSON.stringify(view.log)).not.toContain("watch");
+    }
+    const publicView = projectFor(s, { kind: "public" });
+    expect(JSON.stringify(publicView.log)).not.toContain("watch");
+    // A dead player's god view is resolved-only — no live watch pick.
+    const deadState = { ...s, players: s.players.map((p) => (p.id === villagers[1]!.id ? { ...p, alive: false } : p)) };
+    const deadView = projectFor(deadState, { kind: "player", id: villagers[1]!.id });
+    expect(deadView.log.some((e) => e.type === "actionSubmitted")).toBe(false);
+
+    // The host DOES see the per-seat action (god view keeps actionSubmitted).
+    const hostView = projectFor(s, { kind: "host" });
+    expect(hostView.log.some((e) => e.type === "actionSubmitted" && e.actionType === "watch")).toBe(true);
+  });
+
+  test("night waits for EVERY living actor incl. decoy roles", () => {
+    let s = start(4, rules({ mafia: 1, detective: 1, villager: 2 }), 5);
+    const mafia = byRole(s, "mafia");
+    const detective = byRole(s, "detective");
+    const villagers = s.players.filter((p) => p.roleId === "villager");
+    // Mafia + detective fully act and lock; one villager also settles.
+    s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: villagers[0]!.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia.id }).state;
+    s = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: mafia.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: detective.id }).state;
+    s = settleDecoys(s, [villagers[1]!.id]);
+    // The remaining villager's decoy is still owed -> night stays open.
+    expect(s.phase).toBe("night");
+    s = applyCommand(s, { type: "submitAction", playerId: villagers[1]!.id, targetId: mafia.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: villagers[1]!.id }).state;
+    expect(s.phase).toBe("dawn");
+  });
+
+  test("no living-player pending-count field anywhere in a player projection (night AND day)", () => {
+    let s = start(4, rules({ mafia: 1, detective: 1, villager: 2 }), 5);
+    const villager = s.players.find((p) => p.roleId === "villager")!;
+    const nightView = projectFor(s, { kind: "player", id: villager.id });
+    for (const grep of [/pending.*count/i, /"pendingVotes"/, /"pendingNight"/, /"pendingDawn"/, /of \d+ have/i]) {
+      expect(JSON.stringify(nightView)).not.toMatch(grep);
+    }
+    // Day view (with some votes cast) likewise carries no denominator.
+    let day = toDay(s);
+    const dayIds = living(day).map((p) => p.id);
+    day = applyCommand(day, { type: "castVote", playerId: dayIds[0]!, target: dayIds[1]! }).state;
+    const dayView = projectFor(day, { kind: "player", id: villager.id });
+    // `voted`/`votes` only appear under realtime visibility; hidden (default)
+    // exposes neither to the player.
+    expect(dayView.voted).toBeUndefined();
+    expect(dayView.votes).toBeUndefined();
+    for (const grep of [/pending.*count/i, /of \d+ have/i]) {
+      expect(JSON.stringify(dayView)).not.toMatch(grep);
+    }
+  });
+
+  test("dawn acknowledge: all-ack advances; a stale-gen ack is a no-op", () => {
+    // firstNightKill=false so night 1 has no kill and the game reaches dawn
+    // with everyone alive (no early win to short-circuit the ack test).
+    let s = start(5, rules({ mafia: 1, villager: 4 }, { firstNightKill: false }), 5);
+    // Resolve the night into dawn (no real kill this night).
+    s = settleDecoys(s);
+    expect(s.phase).toBe("dawn");
+    const dawnGen = s.phaseGen;
+    const survivors = living(s);
+
+    // A stale-gen ack (wrong phaseGen) is a rejected no-op — same state ref.
+    const stale = applyCommand(s, { type: "acknowledge", playerId: survivors[0]!.id, gen: dawnGen + 99 });
+    expect(stale.state).toBe(s);
+
+    // Acknowledge with the right gen from every survivor advances to day.
+    for (const p of survivors) {
+      s = applyCommand(s, { type: "acknowledge", playerId: p.id, gen: dawnGen }).state;
+    }
+    expect(s.phase).toBe("day");
+  });
+
+  test("dawn acknowledge: the beat backstop (timerExpired) advances even with un-acked players", () => {
+    let s = start(5, rules({ mafia: 1, villager: 4 }, { firstNightKill: false, dawnDuskBeatMs: 3000 }), 5);
+    s = settleDecoys(s);
+    expect(s.phase).toBe("dawn");
+    // Arm the dawn beat deadline (the natural transition through settleDecoys
+    // carried no `now`), then fire it — the backstop advances to day with
+    // nobody having acknowledged.
+    s.deadlineAt = NOW + 3000;
+    s = applyCommand(s, { type: "timerExpired", at: NOW + 3000, now: NOW + 3000 }).state;
+    expect(s.phase).toBe("day");
+  });
+
+  test("full game N=3 (1 mafia + 2 villagers) terminates correctly (village wins by day vote)", () => {
+    // The smallest legal setup Spec 11 unlocks. Seed chosen so p3 = mafia.
+    let s = start(3, rules({ mafia: 1, villager: 2 }, { firstNightKill: false }), 5);
+    const mafia = byRole(s, "mafia");
+    const villagers = s.players.filter((p) => p.roleId === "villager");
+    expect(s.phase).toBe("night");
+
+    // Night 1: no kill (firstNightKill=false) — everyone still owes a decoy.
+    s = settleDecoys(s);
+    expect(s.phase).toBe("dawn");
+    // Every survivor acknowledges the morning report -> day.
+    for (const p of living(s)) s = applyCommand(s, { type: "acknowledge", playerId: p.id, gen: s.phaseGen }).state;
+    expect(s.phase).toBe("day");
+
+    // Day 1: the village confirms a vote on the mafia -> mafia eliminated,
+    // village wins immediately (parity: 0 mafia left).
+    s = voteOut(s, mafia.id);
+    expect(s.phase).toBe("ended");
+    expect(s.winners).toEqual(["village"]);
+    expect(living(s).map((p) => p.id).sort()).toEqual(villagers.map((p) => p.id).sort());
   });
 });

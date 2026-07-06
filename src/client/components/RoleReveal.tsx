@@ -18,10 +18,14 @@ export function RoleCard({
   roleId,
   mafiaRoster,
   playerNames,
+  investigationResults,
 }: {
   roleId: string;
   mafiaRoster?: string[] | undefined;
   playerNames?: Map<string, string> | undefined;
+  // Spec 11 (2b): the detective's private findings live HERE (pull-only, via
+  // the role card) — never a dawn popup, which would be a unique-screen tell.
+  investigationResults?: { day: number; targetId: string; isMafia: boolean }[] | undefined;
 }) {
   const copy = roleCopyFor(roleId);
   return (
@@ -60,6 +64,23 @@ export function RoleCard({
               ))}
             </ul>
           )}
+        </div>
+      )}
+      {investigationResults && investigationResults.length > 0 && (
+        <div data-testid="detective-findings" className="mt-2 w-full text-left text-sm">
+          <p className="mb-1 text-[0.65rem] uppercase tracking-[0.15em] text-smoke">
+            Your findings
+          </p>
+          <ul className="flex flex-col gap-1">
+            {investigationResults.map((r) => (
+              <li key={`${r.day}-${r.targetId}`}>
+                Night {r.day}: {playerNames?.get(r.targetId) ?? r.targetId} —{" "}
+                <span className={r.isMafia ? "text-blood" : "text-paper"}>
+                  {r.isMafia ? "Mafia" : "Not mafia"}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>

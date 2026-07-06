@@ -7,7 +7,14 @@ export type PlayerId = string;
 export type Phase = "night" | "dawn" | "day" | "runoff" | "dusk" | "ended";
 export type AttackTier = "basic" | "powerful" | "unstoppable";
 export type DefenseTier = "none" | "basic" | "powerful" | "invincible";
-export type NightActionType = "mafiaKill" | "protect" | "investigate" | "roleblock" | "kill";
+// `"watch"` (Spec 11) is the inert decoy action: a no-action role
+// (villager/minion/bomber) picks a living player to "keep an eye on" and
+// confirms it, so every living player performs the same pick→confirm shape at
+// night (kills the "only power roles tap" tell). It creates NO visit any
+// current resolver observes — every resolve-night.ts filter is an ALLOW-LIST,
+// so `"watch"` is ignored by construction. Its target is PRIVATE (filtered
+// from every non-host projection).
+export type NightActionType = "mafiaKill" | "protect" | "investigate" | "roleblock" | "kill" | "watch";
 export type VoteTarget = PlayerId | "no_murder";
 
 export type GameEvent =
@@ -18,6 +25,9 @@ export type GameEvent =
   | { type: "actionUnlocked"; actorId: PlayerId; day: number }
   | { type: "voteCast"; voterId: PlayerId; target: VoteTarget; day: number; phase: Phase }
   | { type: "voteRetracted"; voterId: PlayerId; day: number; phase: Phase }
+  | { type: "voteLocked"; voterId: PlayerId; day: number; phase: Phase }
+  | { type: "voteUnlocked"; voterId: PlayerId; day: number; phase: Phase }
+  | { type: "acknowledged"; playerId: PlayerId; day: number }
   | { type: "attackAttempted"; day: number; actorId: PlayerId; targetId: PlayerId; attack: AttackTier; defense: DefenseTier; outcome: "landed" | "failed" }
   | { type: "playerDied"; playerId: PlayerId; roleId: RoleId; cause: "night" | "vote"; day: number }
   | { type: "investigationResult"; day: number; actorId: PlayerId; targetId: PlayerId; isMafia: boolean }
@@ -75,6 +85,24 @@ export interface ClientGameView {
     consensusReached?: boolean;
     mafiaRoster?: PlayerId[];
     currentVote?: VoteTarget;
+    /** Spec 11: whether the viewer's own day vote is LOCKED (confirmed). A
+     * cast vote is tentative (`false`) until `confirm_vote`; the day phase
+     * resolves only when every living player is locked. Present for a living
+     * viewer during day/runoff whenever they have a standing vote. */
+    dayVoteLocked?: boolean;
+    /** Spec 11: whether the viewer's own night submission is LOCKED
+     * (confirmed) — for the universal pick→confirm flow (real actions AND the
+     * decoy "watch"). Present for a living viewer with a night input during
+     * night. Mafia use `factionVotes[].locked` instead (this stays undefined
+     * for them). */
+    nightActionLocked?: boolean;
+    /** Spec 11: true iff the viewer's role has a night input this phase but
+     * it is the inert decoy (`"watch"`) — lets the UI render the "keep an eye
+     * on someone" panel. Never reveals another player's decoy. */
+    nightIsDecoy?: boolean;
+    /** Spec 11: whether the viewer has acknowledged the current dawn Morning
+     * Report (`acknowledge`). Present during dawn for a living viewer. */
+    acknowledged?: boolean;
   };
   votes?: { playerId: PlayerId; target: VoteTarget }[];
   voted?: PlayerId[];

@@ -1,5 +1,5 @@
 import type { ClientGameView, Viewer } from "../shared/game-view";
-import { activeNightActionFor, canSubmitMafiaVote, currentRoles, getRole, mafiaKillers } from "./roles";
+import { activeNightActionFor, canSubmitMafiaVote, currentRoles, getRole, hasNightInput, mafiaKillers } from "./roles";
 import { resolveConsensus } from "./consensus";
 import type { GameEvent, GameState } from "./types";
 
@@ -13,11 +13,25 @@ function revealForPublic(state: GameState, playerId: string) {
 
 function hiddenVotingFilter(state: GameState, event: GameEvent, god: boolean): boolean {
   if (god || state.ruleset.votingVisibility === "realtime" || state.phase === "dusk" || state.phase === "ended") return true;
-  return event.type !== "voteCast" && event.type !== "voteRetracted";
+  // Spec 11: `voteLocked`/`voteUnlocked` are the confirm-step analog of
+  // `voteCast`/`voteRetracted` — same hidden-voting sealing (they'd leak who
+  // has locked, a per-seat signal).
+  return (
+    event.type !== "voteCast" &&
+    event.type !== "voteRetracted" &&
+    event.type !== "voteLocked" &&
+    event.type !== "voteUnlocked"
+  );
 }
 
 function resolvedLog(state: GameState, god: boolean): GameEvent[] {
-  const log = god ? state.log : state.log.filter((e) => e.type !== "actionSubmitted");
+  // Spec 11: `actionSubmitted` (any type, incl. the decoy `"watch"`) and
+  // `acknowledged` are per-seat action signals — stripped for non-god viewers
+  // so a player never sees who acted/acknowledged (the no-pending-count leak
+  // ban extends to the log, not just aggregate fields).
+  const log = god
+    ? state.log
+    : state.log.filter((e) => e.type !== "actionSubmitted" && e.type !== "acknowledged");
   return log.filter((e) => hiddenVotingFilter(state, e, god));
 }
 
@@ -33,13 +47,18 @@ function resolvedLog(state: GameState, god: boolean): GameEvent[] {
 // tentative pick is still pending) — non-mafia actors are unaffected.
 function actedThisNight(state: GameState, playerId: string): boolean | undefined {
   const registry = currentRoles();
-  const spec = activeNightActionFor(state, registry, playerId);
-  if (spec && spec.consensus !== "mafia") {
-    return state.nightActions.some((a) => a.actorId === playerId);
-  }
   if (canSubmitMafiaVote(state, registry, playerId)) {
     const vote = state.mafiaVotes.find((v) => v.playerId === playerId);
     return !!vote && vote.targetId !== null && vote.locked;
+  }
+  // Spec 11: individual night input (real action OR decoy `"watch"`) — every
+  // living non-absent non-mafia seat now owes one, so the host sees per-seat
+  // acted/pending for the whole table (no seat is `undefined`/asleep at night
+  // anymore). Uniform with mafia: `acted` only once LOCKED (a tentative pick
+  // is still pending).
+  if (hasNightInput(state, registry, playerId)) {
+    const action = state.nightActions.find((a) => a.actorId === playerId);
+    return !!action && action.targetId !== null && action.locked;
   }
   return undefined;
 }
@@ -73,15 +92,32 @@ export function projectFor(state: GameState, viewer: Viewer): ClientGameView {
     winners: state.winners,
   };
   if (state.runoffCandidates) view.runoffCandidates = state.runoffCandidates;
+  // Spec 11 no-pending-count leak ban: a plain (hidden-voting, non-god) player
+  // sees NEITHER the full ballots NOR a `voted` id list — that list is a
+  // per-seat "who has voted" signal (a denominator in disguise). Only realtime
+  // rooms (an explicit ruleset opt-in) expose ballots to players, and only the
+  // god view (host / dead / ended) sees the full tally. A player learns their
+  // own vote/lock state solely through `you.currentVote`/`you.dayVoteLocked`.
   if (state.ruleset.votingVisibility === "realtime" || god || state.phase === "dusk" || state.phase === "ended") view.votes = state.votes;
-  else view.voted = state.votes.map((v) => v.playerId);
   if (viewerPlayer) {
     const role = getRole(currentRoles(), viewerPlayer.roleId);
     const you: NonNullable<ClientGameView["you"]> = { playerId: viewerPlayer.id, alive: viewerPlayer.alive, roleId: viewerPlayer.roleId };
     const pending = state.nightActions.find((a) => a.actorId === viewerPlayer.id);
     const mafiaVote = state.mafiaVotes.find((v) => v.playerId === viewerPlayer.id);
-    if (pending) you.pendingAction = { actionType: pending.actionType, targetId: pending.targetId };
+    // The viewer's OWN submission (incl. their own decoy `"watch"` target) is
+    // fine to reflect back to them — it's only other players' decoys that
+    // must stay private, and those never appear on `you`. Spec 11: expose the
+    // individual lock state + whether this player's night input is the decoy,
+    // so the UI can render the "keep an eye on someone" panel + confirm.
+    if (pending) {
+      you.pendingAction = { actionType: pending.actionType, targetId: pending.targetId };
+      you.nightActionLocked = pending.locked;
+    }
     if (mafiaVote) you.pendingAction = { actionType: "mafiaKill", targetId: mafiaVote.targetId };
+    if (viewerPlayer.alive && state.phase === "night") {
+      const spec = activeNightActionFor(state, currentRoles(), viewerPlayer.id);
+      if (spec?.decoy) you.nightIsDecoy = true;
+    }
     // `viewerPlayer.alive` guard: a dead ex-mafia's god view is
     // resolved-only (Spec 02 v2.2) — this field must not leak live
     // teammate tentative/locked picks for the still-unresolved current
@@ -117,7 +153,15 @@ export function projectFor(state: GameState, viewer: Viewer): ClientGameView {
     }
     if (viewerPlayer.alive) {
       const vote = state.votes.find((v) => v.playerId === viewerPlayer.id);
-      if (vote) you.currentVote = vote.target;
+      if (vote) {
+        you.currentVote = vote.target;
+        you.dayVoteLocked = vote.locked; // Spec 11: tentative vs confirmed.
+      }
+    }
+    // Spec 11: the viewer's own dawn acknowledgement state — never a
+    // denominator or per-seat list (the no-count-leak ban), only their own.
+    if (viewerPlayer.alive && state.phase === "dawn") {
+      you.acknowledged = state.acknowledgedBy.includes(viewerPlayer.id);
     }
     view.you = you;
   }

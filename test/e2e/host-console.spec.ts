@@ -29,6 +29,10 @@ async function joinAsPlayer(page: Page, roomCode: string, name: string) {
 async function startGameWithSeed(hostPage: Page, seed: number) {
   await hostPage.evaluate((s) => {
     sessionStorage.setItem("mafia:testSeed", String(s));
+    // Spec 11: empty role override -> Room sends the exact HOUSE_RULESET shape,
+    // preserving seed 42's assignment (Alice:detective, Bob:mafia,
+    // Carol:bomber, Dave:angel, Erin:mafia).
+    sessionStorage.setItem("mafia:testRoles", "{}");
   }, seed);
   await hostPage.getByTestId("start-game").click();
 }
@@ -76,12 +80,41 @@ async function waitForRoleRevealToClose(page: Page) {
   });
 }
 
-async function castDayVote(page: Page, targetName: string) {
-  await page.getByTestId("vote-option").filter({ hasText: targetName }).click();
+// Spec 11 helpers: confirm night picks (detective/angel), decoy watch
+// (no-action roles), dawn acknowledge, and cast+confirm day votes.
+async function submitAndConfirmNightTarget(page: Page, targetName: string) {
+  await submitNightTarget(page, targetName);
+  const confirm = page.getByTestId("night-confirm-button");
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
 }
 
-async function castNoMurder(page: Page) {
+async function settleWatch(page: Page, targetName: string) {
+  const option = page.getByTestId("night-watch-option").filter({ hasText: targetName });
+  await expect(option.first()).toBeVisible();
+  await option.first().click();
+  const confirm = page.getByTestId("night-confirm-button");
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+}
+
+async function acknowledgeMorning(page: Page) {
+  const button = page.getByTestId("acknowledge-button");
+  if (await button.isVisible().catch(() => false)) await button.click();
+}
+
+async function castAndConfirmDayVote(page: Page, targetName: string) {
+  await page.getByTestId("vote-option").filter({ hasText: targetName }).click();
+  const confirm = page.getByTestId("confirm-vote-button");
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+}
+
+async function castAndConfirmNoMurder(page: Page) {
   await page.getByTestId("vote-option-no-murder").click();
+  const confirm = page.getByTestId("confirm-vote-button");
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +152,9 @@ test.describe("full hosted game via the console only", () => {
     // Host console shows the lobby with the house-rules summary + gated
     // start button before the roster is full enough... actually 5 already
     // clears the 3-player gate; assert the gate text/summary card render.
-    await expect(hostPage.getByTestId("house-rules-summary")).toBeVisible();
+    // Spec 11: the lobby now shows the role-count editor (not a static
+    // house-rules summary card).
+    await expect(hostPage.getByTestId("role-count-editor")).toBeVisible();
     await expect(hostPage.getByTestId("host-player-table")).toContainText(
       "Alice",
     );
@@ -153,14 +188,17 @@ test.describe("full hosted game via the console only", () => {
     }
 
     // Night 1: mafia (Bob+Erin) converge on Carol; angel (Dave) saves her.
+    // Spec 11: every living player pick→confirms — angel/detective confirm,
+    // the bomber (Carol) files a decoy.
     await submitNightTarget(bob, "Carol");
     await submitNightTarget(erin, "Carol");
     await expect(bob.getByTestId("lock-in-button")).toBeEnabled();
     await bob.getByTestId("lock-in-button").click();
     await expect(erin.getByTestId("lock-in-button")).toBeEnabled();
     await erin.getByTestId("lock-in-button").click();
-    await submitNightTarget(dave, "Carol");
-    await submitNightTarget(alice, "Bob");
+    await submitAndConfirmNightTarget(dave, "Carol");
+    await submitAndConfirmNightTarget(alice, "Bob");
+    await settleWatch(carol, "Alice");
 
     await waitForPhase(alice, "dawn", 25_000);
     for (const p of [bob, carol, dave, erin])
@@ -169,37 +207,45 @@ test.describe("full hosted game via the console only", () => {
     // The host log is full and unredacted — it must show the attack outcome.
     await expect(hostPage.getByTestId("host-log")).toContainText("failed");
 
+    for (const p of [alice, bob, carol, dave, erin]) await acknowledgeMorning(p);
+
     await waitForPhase(alice, "day", 25_000);
     for (const p of [bob, carol, dave, erin])
       await waitForPhase(p, "day", 25_000);
     await waitForHostPhase(hostPage, "Day");
 
     // A clean day-1 vote (no tie, avoids the runoff path used elsewhere) —
-    // vote out Bob.
-    await castDayVote(alice, "Bob");
-    await castDayVote(dave, "Bob");
-    await castDayVote(carol, "Bob");
-    await castDayVote(erin, "Bob");
-    await castNoMurder(bob);
+    // vote out Bob. Spec 11: cast + confirm.
+    await castAndConfirmDayVote(alice, "Bob");
+    await castAndConfirmDayVote(dave, "Bob");
+    await castAndConfirmDayVote(carol, "Bob");
+    await castAndConfirmDayVote(erin, "Bob");
+    await castAndConfirmNoMurder(bob);
 
     await waitForPhase(alice, "night", 25_000);
     await waitForHostPhase(hostPage, "Night");
 
-    // Night 2: remaining mafia (Erin) kills Carol.
+    // Night 2: alive = Alice(det), Carol(bomber), Dave(angel), Erin(mafia).
+    // Remaining mafia (Erin) kills Carol; Dave protects Alice; Alice
+    // investigates Erin; Carol (alive at submit time) files a decoy.
     await submitNightTarget(erin, "Carol");
     await expect(erin.getByTestId("lock-in-button")).toBeEnabled();
     await erin.getByTestId("lock-in-button").click();
-    await submitNightTarget(dave, "Alice");
-    await submitNightTarget(alice, "Erin");
+    await submitAndConfirmNightTarget(dave, "Alice");
+    await submitAndConfirmNightTarget(alice, "Erin");
+    await settleWatch(carol, "Alice");
+
+    await waitForPhase(alice, "dawn", 25_000);
+    for (const p of [alice, dave, erin]) await acknowledgeMorning(p);
 
     await waitForPhase(alice, "day", 25_000);
     for (const p of [dave, erin]) await waitForPhase(p, "day", 25_000);
     await waitForHostPhase(hostPage, "Day");
 
     // Day 2: vote out Erin -> mafia count zero -> village wins.
-    await castDayVote(alice, "Erin");
-    await castDayVote(dave, "Erin");
-    await castNoMurder(erin);
+    await castAndConfirmDayVote(alice, "Erin");
+    await castAndConfirmDayVote(dave, "Erin");
+    await castAndConfirmNoMurder(erin);
 
     await waitForPhase(alice, "ended", 25_000);
     await waitForHostPhase(hostPage, "ended");
@@ -214,7 +260,7 @@ test.describe("full hosted game via the console only", () => {
     await hostPage.getByTestId("new-game").click();
     await hostPage.getByTestId("new-game-confirm-confirm").click();
 
-    await expect(hostPage.getByTestId("house-rules-summary")).toBeVisible();
+    await expect(hostPage.getByTestId("role-count-editor")).toBeVisible();
     await expect(hostPage.getByTestId("host-player-table")).toContainText(
       "Alice",
     );
@@ -260,7 +306,7 @@ test.describe("share link degrades gracefully when clipboard is denied", () => {
     });
 
     const roomCode = await createRoomAsHost(hostPage);
-    await expect(hostPage.getByTestId("house-rules-summary")).toBeVisible();
+    await expect(hostPage.getByTestId("role-count-editor")).toBeVisible();
 
     // Before clicking, no fallback is shown.
     await expect(hostPage.getByTestId("manual-share-link")).toHaveCount(0);
@@ -280,15 +326,15 @@ test.describe("share link degrades gracefully when clipboard is denied", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Start gate honesty (hotfix): the button must be gated by the engine's own
-// validateRuleset against HOUSE_RULES (min 5 players), NOT a hardcoded 3.
-// A host with 4 players must see a DISABLED button whose copy states the real
-// requirement; the 5th join flips it to an enabled "Start game". Without this
-// fix the button was enabled at 3-4 and then failed server-side validation
-// with a confusing role_count_mismatch.
+// Spec 11 Feature 4: the role-count editor + live validation gate. Below 3
+// players Start is always disabled. The editor's default roster (1 mafia,
+// 1 detective, 1 angel, 1 bomber = 4 roles) does NOT fit 3 players, so Start
+// stays disabled with the mismatch reason until the host dials the extra
+// power roles down to reach a legal 1 mafia + 2 villagers — the small-game
+// setup this feature unlocks.
 // ---------------------------------------------------------------------------
-test.describe("start gate reflects the real house-ruleset minimum", () => {
-  test("start-game is disabled at 4 players and enabled at 5", async ({
+test.describe("start gate + role-count editor (Spec 11 Feature 4)", () => {
+  test("editor unlocks a 3-player game once the roster is dialed to fit", async ({
     browser,
   }) => {
     const hostCtx = await browser.newContext();
@@ -297,34 +343,39 @@ test.describe("start gate reflects the real house-ruleset minimum", () => {
 
     const startBtn = hostPage.getByTestId("start-game");
 
-    // Join four players — still under the house minimum of 5.
-    const names = ["Alice", "Bob", "Carol", "Dave"];
+    // Two players: below the 3-player floor -> disabled.
     const ctxs = [];
-    for (const name of names) {
+    for (const name of ["Alice", "Bob"]) {
       const ctx = await browser.newContext();
       ctxs.push(ctx);
-      const page = await ctx.newPage();
-      await joinAsPlayer(page, roomCode, name);
+      await joinAsPlayer(await ctx.newPage(), roomCode, name);
     }
-
-    // Host console reflects 4 players and a gated, honest button.
-    await expect(hostPage.getByTestId("host-player-table")).toContainText(
-      "Dave",
-    );
+    await expect(hostPage.getByTestId("host-player-table")).toContainText("Bob");
     await expect(startBtn).toBeDisabled();
-    await expect(startBtn).toContainText("Need at least 5 players");
 
-    // The 5th join clears the gate — button enables and shows "Start game".
-    const erinCtx = await browser.newContext();
-    ctxs.push(erinCtx);
-    const erin = await erinCtx.newPage();
-    await joinAsPlayer(erin, roomCode, "Erin");
+    // Third player joins. The default roster (mafia+det+angel+bomber = 4
+    // roles) is too many for 3 seats -> Start still disabled (role mismatch).
+    const carolCtx = await browser.newContext();
+    ctxs.push(carolCtx);
+    await joinAsPlayer(await carolCtx.newPage(), roomCode, "Carol");
+    await expect(hostPage.getByTestId("host-player-table")).toContainText("Carol");
+    await expect(startBtn).toBeDisabled();
 
-    await expect(hostPage.getByTestId("host-player-table")).toContainText(
-      "Erin",
+    // Dial the three extra power roles to 0 -> 1 mafia + 2 villagers = 3.
+    // The editor's live validation then enables Start.
+    for (const role of ["detective", "angel", "suicide_bomber"]) {
+      await hostPage.getByTestId(`role-count-${role}-dec`).click();
+    }
+    await expect(hostPage.getByTestId("role-count-villager")).toHaveAttribute(
+      "data-count",
+      "2",
     );
     await expect(startBtn).toBeEnabled();
     await expect(startBtn).toHaveText("Start game");
+
+    // Players see the roster (counts only) via pendingRuleset.
+    const carolPage = (await carolCtx.pages())[0]!;
+    await expect(carolPage.getByTestId("pending-ruleset-summary")).toContainText("Villager");
 
     await hostCtx.close();
     for (const ctx of ctxs) await ctx.close();
@@ -373,23 +424,25 @@ test.describe("stall drill: mark absent unblocks a stalled night", () => {
     // Alice (detective) act normally so only the mafia consensus is
     // stalled. Spec 08: Bob's `acted` status requires his LOCK, not just his
     // submission.
+    // Bob (mafia) locks; the other living players confirm too (Spec 11: angel
+    // + detective confirm, the bomber files a decoy). Erin (the other mafia)
+    // never submits at all — the ghosting player who stalls the night.
     await submitNightTarget(bob, "Carol");
     await expect(bob.getByTestId("lock-in-button")).toBeEnabled();
     await bob.getByTestId("lock-in-button").click();
-    await submitNightTarget(dave, "Carol");
-    await submitNightTarget(alice, "Bob");
+    await submitAndConfirmNightTarget(dave, "Carol");
+    await submitAndConfirmNightTarget(alice, "Bob");
+    await settleWatch(carol, "Alice");
 
-    // Confirm the night is genuinely stalled — still night after every other
-    // actor has submitted.
+    // Confirm the night is genuinely stalled — still night (Erin never acted).
     await expect(hostPage.getByTestId("host-phase-label")).toContainText(
       /night/i,
     );
 
     // Live god-view status column (Spec 02 v2.7's players[].acted, host+
-    // night-only, amended by Spec 08 for mafia = locked-only): Bob has
-    // LOCKED -> "acted"; Erin (the ghosting mafia) still owes her consensus
-    // vote -> "pending"; Carol (suicide bomber, no night action) has
-    // nothing to submit -> "asleep", never a fabricated "pending".
+    // night-only; Spec 11: EVERY living seat owes a night input, so none is
+    // "asleep"). Bob LOCKED -> "acted"; Erin (ghosting) still owes her
+    // consensus vote -> "pending"; Carol (bomber) LOCKED her decoy -> "acted".
     await expect(
       hostPage
         .getByTestId("host-player-row")
@@ -407,7 +460,7 @@ test.describe("stall drill: mark absent unblocks a stalled night", () => {
         .getByTestId("host-player-row")
         .filter({ hasText: "Carol" })
         .getByTestId("host-player-status"),
-    ).toContainText(/asleep/i);
+    ).toContainText(/acted/i);
 
     // Host marks Erin absent from her row in the table.
     await hostPage
@@ -473,26 +526,31 @@ test.describe("stall drill: force-advance a stalled vote", () => {
       await waitForRoleRevealToClose(p);
 
     // Clean night: mafia converge on Carol and lock in, angel saves her.
+    // Spec 11: every living player pick→confirms; the bomber files a decoy.
     await submitNightTarget(bob, "Carol");
     await submitNightTarget(erin, "Carol");
     await expect(bob.getByTestId("lock-in-button")).toBeEnabled();
     await bob.getByTestId("lock-in-button").click();
     await expect(erin.getByTestId("lock-in-button")).toBeEnabled();
     await erin.getByTestId("lock-in-button").click();
-    await submitNightTarget(dave, "Carol");
-    await submitNightTarget(alice, "Bob");
+    await submitAndConfirmNightTarget(dave, "Carol");
+    await submitAndConfirmNightTarget(alice, "Bob");
+    await settleWatch(carol, "Alice");
 
     await waitForPhase(alice, "dawn", 25_000);
     for (const p of [bob, carol, dave, erin])
       await waitForPhase(p, "dawn", 25_000);
+    for (const p of [alice, bob, carol, dave, erin]) await acknowledgeMorning(p);
     await waitForPhase(alice, "day", 25_000);
     for (const p of [bob, carol, dave, erin])
       await waitForPhase(p, "day", 25_000);
     await waitForHostPhase(hostPage, "Day");
 
-    // Only Alice and Dave vote; the rest stall.
-    await castDayVote(alice, "Bob");
-    await castDayVote(dave, "Bob");
+    // Only Alice and Dave vote AND confirm; the rest stall. Spec 11: force
+    // resolves from LOCKED (confirmed) votes only, so the confirm is required
+    // for their ballots to count.
+    await castAndConfirmDayVote(alice, "Bob");
+    await castAndConfirmDayVote(dave, "Bob");
 
     await hostPage.getByTestId("force-advance-button").click();
     // Per-phase confirm copy (D2 pin) — day/runoff wording.
@@ -501,8 +559,8 @@ test.describe("stall drill: force-advance a stalled vote", () => {
     );
     await hostPage.getByTestId("force-advance-confirm-confirm").click();
 
-    // The vote resolves with only the ballots cast (Bob eliminated by
-    // whoever voted, everyone else counted as abstain).
+    // The vote resolves with only the confirmed ballots (Bob eliminated;
+    // everyone who didn't confirm counts as abstain).
     await waitForPhase(alice, "dusk", 25_000);
     await expect(alice.getByTestId("interstitial-lines")).toContainText("Bob");
 
@@ -792,15 +850,17 @@ test.describe("host reconnect", () => {
       "Mafia",
     );
 
-    // Players never noticed — finish the night normally. Spec 08: the
-    // mafia team (Bob, Erin) must lock in their agreed target before the
-    // night can resolve.
+    // Players never noticed — finish the night normally. Spec 08+11: the
+    // mafia lock their target; the angel (Dave) confirms his earlier pick;
+    // the detective (Alice) confirms; the bomber (Carol) files a decoy.
     await submitNightTarget(erin, "Carol");
     await expect(bob.getByTestId("lock-in-button")).toBeEnabled();
     await bob.getByTestId("lock-in-button").click();
     await expect(erin.getByTestId("lock-in-button")).toBeEnabled();
     await erin.getByTestId("lock-in-button").click();
-    await submitNightTarget(alice, "Bob");
+    await dave.getByTestId("night-confirm-button").click();
+    await submitAndConfirmNightTarget(alice, "Bob");
+    await settleWatch(carol, "Alice");
 
     await waitForPhase(alice, "dawn", 25_000);
     await expect(alice.getByTestId("interstitial-lines")).toContainText(

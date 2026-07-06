@@ -213,14 +213,23 @@ export default function Room({ code }: { code: string }) {
     });
   }
 
-  function handleStartGame() {
+  // Spec 11: the host lobby's role-count editor owns the ruleset and passes it
+  // here. A test-role override (sessionStorage) still wins so the E2E can force
+  // a specific role mix; otherwise the editor's ruleset is used, falling back
+  // to the house ruleset (the player Lobby path, which never starts a game).
+  function handleStartGame(ruleset?: unknown) {
     const seed = testSeedOverride();
     const roleOverride = testRolesOverride();
-    const ruleset = roleOverride ? { ...HOUSE_RULESET, roles: { ...HOUSE_RULESET.roles, ...roleOverride } } : HOUSE_RULESET;
+    // A test role override forces a specific mix on top of the HOUSE ruleset
+    // (unchanged from before the editor existed, so the E2E suite's fixed role
+    // maps are unaffected). Otherwise the host editor's ruleset is used.
+    const finalRuleset = roleOverride
+      ? { ...HOUSE_RULESET, roles: { ...HOUSE_RULESET.roles, ...roleOverride } }
+      : (ruleset ?? HOUSE_RULESET);
     send(
       seed === undefined
-        ? { type: "start_game", ruleset }
-        : { type: "start_game", ruleset, seed },
+        ? { type: "start_game", ruleset: finalRuleset }
+        : { type: "start_game", ruleset: finalRuleset, seed },
     );
   }
 

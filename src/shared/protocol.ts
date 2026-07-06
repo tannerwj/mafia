@@ -32,6 +32,21 @@ export interface ClientRoomState {
   hostConnected: boolean;
   createdAt: number;
   game: ClientGameView | null;
+  /** Spec 06 D1 / Spec 11: the host's pending lobby ruleset, broadcast so
+   * players see the roster (counts only, not assignments) before the game
+   * starts. `null` until the host first sets one (server defaults it to the
+   * house ruleset at claim time). Structurally the engine's `Ruleset`, but
+   * typed loosely here (like `StartGameMessage.ruleset`) so `shared/` stays
+   * free of an engine import — the engine re-validates it authoritatively. */
+  pendingRuleset: PendingRuleset | null;
+}
+
+/** The subset of the engine `Ruleset` the lobby roster card reads. Kept
+ * standalone (no engine import) — the server stores/validates the full
+ * object; this only shapes what the client rendering needs. */
+export interface PendingRuleset {
+  roles: Record<string, number | "auto">;
+  [key: string]: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +106,36 @@ export interface RetractVoteMessage {
   type: "retract_vote";
 }
 
+/** Spec 11. Locks the sender's tentative day vote (the day resolves only once
+ * every living player has confirmed). Rejects `no_pick_to_lock` if they have
+ * no cast vote, `not_your_phase` outside day/runoff. */
+export interface ConfirmVoteMessage {
+  type: "confirm_vote";
+}
+
+/** Spec 11. Returns a confirmed day vote to tentative. */
+export interface UnconfirmVoteMessage {
+  type: "unconfirm_vote";
+}
+
+/** Spec 11. Acknowledges the current dawn Morning Report. `gen` echoes the
+ * sender's latest `phaseGen` — a stale ack (gen mismatch) no-ops server-side,
+ * so a queued ack can never acknowledge the next phase. */
+export interface AcknowledgeMessage {
+  type: "acknowledge";
+  gen: number;
+}
+
+/** Spec 06 D1 / Spec 11. Host-only, lobby-only, debounced: sets the pending
+ * lobby ruleset (role counts). Broadcast to players via
+ * `ClientRoomState.pendingRuleset`. Excluded from `lastActivityAt` (idle
+ * editing must not immortalize an empty room). `ruleset` is `unknown` on the
+ * wire (like `start_game`) — the server validates it. */
+export interface SetRulesetMessage {
+  type: "set_ruleset";
+  ruleset: unknown;
+}
+
 /** Spec 08. Commits the sender's current tentative mafia-kill pick. Rejects
  * `no_pick_to_lock` if they have no target set, `not_lockable` if they're
  * not a living mafia-consensus killer during a night phase (including once
@@ -138,11 +183,15 @@ export type ClientMessage =
   | SubmitActionMessage
   | CastVoteMessage
   | RetractVoteMessage
+  | ConfirmVoteMessage
+  | UnconfirmVoteMessage
+  | AcknowledgeMessage
   | LockActionMessage
   | UnlockActionMessage
   | ForceAdvanceMessage
   | MarkAbsentMessage
   | MarkPresentMessage
+  | SetRulesetMessage
   | NewGameMessage;
 
 // ---------------------------------------------------------------------------

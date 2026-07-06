@@ -25,6 +25,12 @@ function describe(event: GameEvent, names: Map<string, string>): string {
       return `${name(event.voterId)} voted for ${event.target === "no_murder" ? "no murder" : name(event.target)}`;
     case "voteRetracted":
       return `${name(event.voterId)} retracted their vote`;
+    case "voteLocked":
+      return `${name(event.voterId)} confirmed their vote`;
+    case "voteUnlocked":
+      return `${name(event.voterId)} unconfirmed their vote`;
+    case "acknowledged":
+      return `${name(event.playerId)} acknowledged the morning report`;
     case "attackAttempted":
       return `Attack on ${name(event.targetId)} by ${name(event.actorId)}: ${event.outcome} (${event.attack} vs ${event.defense})`;
     case "playerDied":
