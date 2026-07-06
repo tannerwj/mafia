@@ -156,3 +156,4 @@ worker-configuration.d.ts
 
 # wrangler dev-only vars (never deployed)
 .dev.vars
+.claude-scratch/
