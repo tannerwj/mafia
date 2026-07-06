@@ -1,7 +1,14 @@
 # Spec 15 — AI narrator ("The Storyteller")
 
-**v2 DRAFT — 2026-07-06 · Status: awaiting re-review, then Tanner sign-off.
-Do NOT build from this draft.**
+**v3 — 2026-07-06 · Status: review-complete (BUILDABLE per re-review);
+awaiting Tanner sign-off on the open product questions, then orchestrator
+prerequisites (AI binding + bake-off), then build.**
+*v3 folds the v2 re-review: queue-of-one/in-flight coordination flag moved
+from DO memory to `ctx.storage` (in-memory slot was the v0 session-state
+anti-pattern — DO eviction mid-AI-call would hang "busy" forever); draft
+TEXT stays memory-only as designed; storyState eager-init at claim pinned;
+"first real caller" wording corrected ({kind:"public"} already has
+spot-check coverage in engine.test.ts — this is its first product caller).*
 *v2 folds all 11 findings from the adversarial review
 (15-review-findings.md): AI binding as explicit orchestrator prerequisite
 (K1); beat set split into pre-reveal atmosphere vs post-reveal report with
@@ -68,10 +75,12 @@ An LLM cannot leak what it was never told. The defense is structural:
    (§Memory), which itself contains only prior model output + prior facts
    payloads + host-typed settings. No other code path may contribute prompt
    content.
-   - This is the first real caller of `{kind:"public"}`: the build adds
-     dedicated `project.test.ts` coverage for that branch (god must be
-     false pre-`ended`; no `you`; graveyard per revealOnDeath; tallies per
-     votingVisibility; log via the same filters living players get).
+   - This is the first PRODUCT caller of `{kind:"public"}` (the branch
+     already has spot-check coverage in engine.test.ts:552/654/1003/1257 —
+     build on it): the build adds dedicated coverage for the fields this
+     feature reads (god false pre-`ended`; no `you`; graveyard per
+     revealOnDeath; tallies per votingVisibility; log via the same filters
+     living players get).
    - At `phase === "ended"` the public projection is legitimately god
      (winners/roles are public at game over) — that's the epilogue beat,
      not a leak.
@@ -181,6 +190,8 @@ storyState = {
   settings ride the host snapshot (§Delivery), so reconnect restores
   everything kept.
 - Cleared on rematch. Capped (~32KB) via summary folding.
+- Eager-init at room claim (default `{enabled:false, ...}`), mirroring the
+  `PENDING_RULESET_KEY` pattern — no lazy-init ambiguity.
 
 ## Delivery & protocol (M5/M6 — concrete, this spec IS the protocol change)
 
@@ -203,11 +214,19 @@ New in `src/shared/protocol.ts`:
   `requestId` is client-minted, echoed verbatim; the host UI drops any
   `story_draft` whose phaseGen ≠ its current phaseGen (a slow draft for a
   force-advanced-past beat renders nowhere).
-- **Queue-of-one (M6):** one in-flight generation per room; `generate_story`
-  while busy → `story_error busy`. No concurrent AI calls, no last-writer
-  races. Host disconnect mid-flight: the call completes into the transient
-  slot; all currently-connected host sockets receive the draft (or it
-  expires with the beat).
+- **Queue-of-one (M6, coordination fixed per v2 re-review):** one in-flight
+  generation per room; `generate_story` while busy → `story_error busy`.
+  The in-flight record (`requestId`, `beat`, `phaseGen`, `startedAt`) lives
+  in **`ctx.storage`** — NEVER a DO-memory flag (v0 anti-pattern; a DO can
+  be evicted mid-`env.AI.run()` await and an in-memory flag would hang the
+  room "busy" forever). Same async-coordination pattern as
+  `GAME_DEADLINE_KEY` (game-room.ts): an in-flight record older than ~20s
+  (past the 15s AI timeout) is treated as stale and clearable by the next
+  `generate_story`. The draft TEXT itself stays memory-only (ephemeral by
+  design, §Memory) — if the DO was evicted mid-flight the draft is simply
+  lost and the host re-spins; only the coordination flag needs durability.
+  Host disconnect mid-flight: the call completes and all currently-
+  connected host sockets receive the draft (or it expires with the beat).
 - **Host-only sends (M5):** NEW helper in game-room.ts,
   `sendToHostSockets(msg)` — `socketsFor` host-kind iteration (pattern of
   handleKick/handleLeave), sends to ALL host sockets (multi-host-device is
