@@ -16,7 +16,14 @@ export default defineConfig({
       // wrangler.jsonc itself (that file is also `wrangler deploy`'s
       // config) — this override only applies inside the pool-workers
       // Miniflare instance (Spec 03).
-      miniflare: { bindings: { ALLOW_TEST_SEED: "1" } },
+      //
+      // Spec 15: STORYTELLER_FAKE mirrors the same mechanism — pool-workers
+      // tests never call the real `env.AI` binding; the DO returns a
+      // deterministic canned {scene, bibleUpdates} instead (see
+      // src/server/storyteller.ts fakeStoryOutput). `wrangler dev`/Playwright
+      // get the equivalent via `.dev.vars` (a different mechanism — that
+      // file isn't read by Miniflare's test bindings).
+      miniflare: { bindings: { ALLOW_TEST_SEED: "1", STORYTELLER_FAKE: "1" } },
     }),
   ],
   test: {

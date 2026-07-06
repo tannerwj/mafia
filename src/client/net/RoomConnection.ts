@@ -4,6 +4,8 @@ import type {
   ErrorMessage,
   RejectionMessage,
   ServerMessage,
+  StoryDraftMessage,
+  StoryErrorMessage,
 } from "../../shared/protocol";
 import { CLOSE_BAD_CREDENTIAL, CLOSE_KICKED } from "../../shared/protocol";
 
@@ -35,6 +37,10 @@ export interface RoomConnectionEvents {
   /** A normal in-game command rejection (e.g. `not_your_phase`) — never
    * closes the socket. Surfaced as a toast, not a thrown error. */
   onRejection?: (rejection: RejectionMessage) => void;
+  /** Spec 15. Host-only messages (the server never sends these to a player
+   * socket — a player-side RoomConnection simply never receives them). */
+  onStoryDraft?: (msg: StoryDraftMessage) => void;
+  onStoryError?: (msg: StoryErrorMessage) => void;
   /** Terminal close — bad_host_key or bad_seat_token. The credential that
    * was presented should be discarded by the caller. */
   onBadCredential?: () => void;
@@ -252,6 +258,12 @@ export class RoomConnection {
         return;
       case "rejection":
         this.events.onRejection?.(msg);
+        return;
+      case "story_draft":
+        this.events.onStoryDraft?.(msg);
+        return;
+      case "story_error":
+        this.events.onStoryError?.(msg);
         return;
       case "pong":
         return;

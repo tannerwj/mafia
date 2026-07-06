@@ -39,6 +39,27 @@ export interface ClientRoomState {
    * typed loosely here (like `StartGameMessage.ruleset`) so `shared/` stays
    * free of an engine import — the engine re-validates it authoritatively. */
   pendingRuleset: PendingRuleset | null;
+  /** Spec 15 (AI narrator). Populated by `buildStateFor` ONLY for a host
+   * viewer — `null`/omitted for every player viewer (leak-tested). Carries
+   * settings + persona bible + the KEPT scene history only; a pending
+   * (not-yet-committed) draft never rides here (see `story_draft`). */
+  story?: StoryState | null;
+}
+
+/** Spec 15. The five narrator tones offered in the Storyteller setup card. */
+export type Tone = "noir" | "cozy" | "horror" | "comedy" | "absurd";
+
+/** Spec 15. One beat family member — see the spec's Beats table for the
+ * legal-phase pinning (`sunrise-hold`->`sunrise`, etc). */
+export type BeatId = "sunrise-hold" | "sunset-hold" | "morning-report" | "post-vote" | "epilogue";
+
+/** Spec 15. Host-only narrator memory — settings + persona bible + KEPT
+ * scenes only (auto-keep latest; no Keep button). Cleared on rematch. */
+export interface StoryState {
+  enabled: boolean;
+  settings: { theme: string; tone: Tone };
+  bible: Record<string, string>;
+  scenes: Array<{ beat: BeatId; day: number; text: string }>;
 }
 
 /** The subset of the engine `Ruleset` the lobby roster card reads. Kept
@@ -184,6 +205,36 @@ export interface NewGameMessage {
   type: "new_game";
 }
 
+/** Spec 15. Host-only, any time (lobby or in-game): sets the Storyteller
+ * enabled flag + theme/tone. Stored in DO storage; changeable mid-game.
+ * Rejected for non-host like other host-only messages. */
+export interface SetStorySettingsMessage {
+  type: "set_story_settings";
+  enabled: boolean;
+  theme: string;
+  tone: Tone;
+}
+
+/** Spec 15. Host-only: request a new scene draft for `beat`. `phaseGen`
+ * mirrors `reveal`/`force_advance` — the server rejects a mismatch
+ * (`stale_story`) or a beat whose legal phase != the current phase
+ * (`wrong_phase`). `requestId` is client-minted and echoed verbatim on the
+ * `story_draft`/`story_error` reply so the UI can correlate a tap to its
+ * result even across a [Re-spin]. */
+export interface GenerateStoryMessage {
+  type: "generate_story";
+  beat: BeatId;
+  phaseGen: number;
+  requestId: string;
+}
+
+/** Spec 15. Host-only: drops the pending draft for `requestId` without
+ * committing it (auto-keep otherwise commits on beat supersession). */
+export interface DiscardStoryMessage {
+  type: "discard_story";
+  requestId: string;
+}
+
 export type ClientMessage =
   | HelloMessage
   | KickMessage
@@ -203,7 +254,10 @@ export type ClientMessage =
   | MarkAbsentMessage
   | MarkPresentMessage
   | SetRulesetMessage
-  | NewGameMessage;
+  | NewGameMessage
+  | SetStorySettingsMessage
+  | GenerateStoryMessage
+  | DiscardStoryMessage;
 
 // ---------------------------------------------------------------------------
 // Server -> client
@@ -259,13 +313,36 @@ export interface PongMessage {
   type: "pong";
 }
 
+/** Spec 15. Host-sockets-only (never sent to a player socket — leak-tested):
+ * a fresh draft for `requestId`/`beat`/`phaseGen`. The host UI drops any
+ * draft whose `phaseGen` no longer matches its current phaseGen (a slow
+ * draft for a since-force-advanced beat renders nowhere). Not persisted —
+ * ephemeral until auto-keep commits it into `ClientRoomState.story`. */
+export interface StoryDraftMessage {
+  type: "story_draft";
+  requestId: string;
+  beat: BeatId;
+  phaseGen: number;
+  text: string;
+}
+
+/** Spec 15. Host-sockets-only. `generation_failed` never touches game state
+ * or phase machinery — it's purely "the muse is silent, try again." */
+export interface StoryErrorMessage {
+  type: "story_error";
+  requestId: string;
+  code: "disabled" | "busy" | "rate_limited" | "stale_story" | "wrong_phase" | "generation_failed";
+}
+
 export type ServerMessage =
   | WelcomeMessage
   | SnapshotMessage
   | KickedMessage
   | ErrorMessage
   | RejectionMessage
-  | PongMessage;
+  | PongMessage
+  | StoryDraftMessage
+  | StoryErrorMessage;
 
 export type ProtocolMessage = ClientMessage | ServerMessage;
 

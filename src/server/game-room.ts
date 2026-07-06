@@ -1,10 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import type {
+  BeatId,
   ClientMessage,
   ClientPlayerView,
   ClientRoomState,
   ErrorCode,
   ServerMessage,
+  StoryState,
 } from "../shared/protocol";
 import {
   CLOSE_AUTH_TIMEOUT,
@@ -23,6 +25,15 @@ import {
   type LobbyPlayer,
   type Ruleset,
 } from "../engine";
+import {
+  BEAT_PHASE,
+  buildPrompt,
+  buildStoryFacts,
+  fakeStoryOutput,
+  parseStoryOutput,
+  type StoryMemory,
+  type StorySettings,
+} from "./storyteller";
 
 // ---------------------------------------------------------------------------
 // Storage schema (Spec 01). No in-memory session state anywhere — everything
@@ -70,6 +81,36 @@ const GAME_DEADLINE_KEY = "gameDeadlineAt";
 // Spec 06 D1 / Spec 11: the host's pending lobby ruleset (role counts).
 // Defaulted to HOUSE_RULES at claim time; overwritten by `set_ruleset`.
 const PENDING_RULESET_KEY = "pendingRuleset";
+// Spec 15: per-game narrator memory (settings + persona bible + KEPT scenes
+// only). Eager-init at claim time to a disabled default, mirroring
+// PENDING_RULESET_KEY — no lazy-init ambiguity (§Memory).
+const STORY_STATE_KEY = "storyState";
+// Spec 15 (M6/v2-re-review Finding 7 fix): the queue-of-one in-flight
+// generation record. MUST live in ctx.storage, never DO memory — a DO can be
+// evicted mid-`env.AI.run()` await and an in-memory flag would hang the room
+// "busy" forever (the same async-coordination pattern as GAME_DEADLINE_KEY).
+// The draft TEXT itself stays memory-only (ephemeral by design); only this
+// coordination flag needs durability.
+const STORY_INFLIGHT_KEY = "storyInflight";
+
+interface StoryInflightRecord {
+  requestId: string;
+  beat: BeatId;
+  phaseGen: number;
+  startedAt: number;
+}
+
+const STORY_INFLIGHT_STALE_MS = 20_000; // past the 15s AI timeout
+const STORY_RATE_LIMIT_PER_MIN = 10;
+const STORY_AI_TIMEOUT_MS = 15_000;
+const STORY_MAX_BYTES = 32 * 1024; // ~32KB cap (§Memory) via scene trimming
+
+const DEFAULT_STORY_STATE: StoryState = {
+  enabled: false,
+  settings: { theme: "", tone: "noir" },
+  bible: {},
+  scenes: [],
+};
 
 const AUTH_REAP_MS = 30_000;
 const EMPTY_LOBBY_TTL_MS = 60 * 60 * 1000; // 1h
@@ -110,7 +151,40 @@ function socketsFor(
   });
 }
 
+/** A not-yet-committed story draft. Deliberately in-memory ONLY (never
+ * `ctx.storage`) — spec §Memory: "pending drafts are ephemeral by design."
+ * If the DO is evicted mid-beat the draft is simply lost and the host
+ * re-spins; only the queue-of-one coordination flag (STORY_INFLIGHT_KEY)
+ * needs to survive eviction, not the draft text itself. */
+interface PendingDraft {
+  requestId: string;
+  beat: BeatId;
+  phaseGen: number;
+  day: number;
+  text: string;
+  bibleUpdates: Record<string, string>;
+}
+
+/** Folds a kept draft into `storyState`: appends the scene, merges
+ * `bibleUpdates` into the persona bible, and trims oldest scenes toward the
+ * ~32KB cap (§Memory: "capped via summary folding" — v1 trims rather than
+ * model-summarizing, a simpler, equally-safe-for-leaks approximation: no
+ * summary text is ever generated, so there's nothing new to leak-test). */
+function commitDraft(story: StoryState, draft: PendingDraft): StoryState {
+  const scenes = [...story.scenes, { beat: draft.beat, day: draft.day, text: draft.text }];
+  const bible = { ...story.bible, ...draft.bibleUpdates };
+  let trimmed = scenes;
+  while (trimmed.length > 1 && JSON.stringify({ ...story, scenes: trimmed, bible }).length > STORY_MAX_BYTES) {
+    trimmed = trimmed.slice(1);
+  }
+  return { ...story, bible, scenes: trimmed };
+}
+
 export class GameRoom extends DurableObject<Env> {
+  /** Draft-in-progress-or-awaiting-supersession state, keyed by requestId.
+   * See `PendingDraft` — deliberately DO-memory only, never `ctx.storage`. */
+  private pendingDrafts = new Map<string, PendingDraft>();
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // Wake-recovery guard (flagged by Spec 03 v2.2 for hardening here):
@@ -190,6 +264,7 @@ export class GameRoom extends DurableObject<Env> {
     await this.ctx.storage.put(ROOM_KEY, room);
     await this.ctx.storage.put(PLAYERS_KEY, [] as PlayerRecord[]);
     await this.ctx.storage.put(PENDING_RULESET_KEY, HOUSE_RULES);
+    await this.ctx.storage.put(STORY_STATE_KEY, DEFAULT_STORY_STATE);
     await this.scheduleNextAlarm();
     return Response.json({ status: "claimed", hostKey });
   }
@@ -359,6 +434,15 @@ export class GameRoom extends DurableObject<Env> {
         return;
       case "new_game":
         await this.handleNewGame(ws, attachment);
+        return;
+      case "set_story_settings":
+        await this.handleSetStorySettings(ws, attachment, parsed);
+        return;
+      case "generate_story":
+        await this.handleGenerateStory(ws, attachment, parsed);
+        return;
+      case "discard_story":
+        await this.handleDiscardStory(ws, attachment, parsed);
         return;
       default:
         this.sendError(
@@ -727,9 +811,285 @@ export class GameRoom extends DurableObject<Env> {
 
     await this.ctx.storage.delete(GAME_KEY);
     await this.ctx.storage.delete(GAME_DEADLINE_KEY);
+    // Spec 15: narrator memory (bible + kept scenes) is per-game — cleared on
+    // rematch. Settings (enabled/theme/tone) are a host preference, not game
+    // state, so they're preserved across the reset. Auto-keep: a rematch is
+    // the terminal supersession event for a still-pending epilogue draft
+    // (game end already fired; there's no further phase advance to catch
+    // it) — commit it first, fire-safe, before the memory wipe below would
+    // otherwise discard it unread.
+    try {
+      let story = await this.getStoryState();
+      for (const draft of this.pendingDrafts.values()) story = commitDraft(story, draft);
+      await this.ctx.storage.put(STORY_STATE_KEY, {
+        ...DEFAULT_STORY_STATE,
+        enabled: story.enabled,
+        settings: story.settings,
+      } satisfies StoryState);
+    } catch {
+      // Fire-safe — a rematch must never fail because of story memory.
+    } finally {
+      this.pendingDrafts.clear();
+    }
+    await this.ctx.storage.delete(STORY_INFLIGHT_KEY);
     room.phase = "lobby";
     await this.ctx.storage.put(ROOM_KEY, room);
     await this.touchAndBroadcast();
+  }
+
+  // -------------------------------------------------------------------------
+  // Spec 15 — AI narrator ("The Storyteller"). Host-only. See
+  // docs/specs/15-ai-narrator.md THE LEAK CONTRACT: all model input flows
+  // through `buildStoryFacts(view, beat)` in storyteller.ts, where `view` is
+  // EXACTLY `projectFor(state, { kind: "public" })` — never raw `GameState`.
+  // Draft TEXT is memory-only (never `ctx.storage`) until auto-commit; the
+  // queue-of-one in-flight coordination record is the one piece that DOES
+  // need `ctx.storage` durability (see STORY_INFLIGHT_KEY above).
+  // -------------------------------------------------------------------------
+
+  private async getStoryState(): Promise<StoryState> {
+    return (await this.ctx.storage.get<StoryState>(STORY_STATE_KEY)) ?? DEFAULT_STORY_STATE;
+  }
+
+  private async handleSetStorySettings(
+    ws: WebSocket,
+    attachment: Attachment,
+    msg: Extract<ClientMessage, { type: "set_story_settings" }>,
+  ): Promise<void> {
+    if (attachment.kind !== "host") {
+      this.sendRejection(ws, "not_host");
+      return;
+    }
+    const story = await this.getStoryState();
+    const next: StoryState = {
+      ...story,
+      enabled: msg.enabled,
+      settings: { theme: msg.theme, tone: msg.tone },
+    };
+    await this.ctx.storage.put(STORY_STATE_KEY, next);
+    await this.touchAndBroadcast({ skipActivity: true });
+  }
+
+  /** Host-only: request a fresh draft for `beat`. Rejects (via `story_error`,
+   * NOT a `rejection` — these are host-tool errors, not game commands)
+   * disabled/busy/rate_limited/stale_story/wrong_phase before ever touching
+   * `env.AI`. No `blockConcurrencyWhile` around the AI await (m9) — other
+   * webSocketMessage turns interleave freely during the up-to-15s window.
+   * Failure on ANY path here never touches game state or phase machinery. */
+  private async handleGenerateStory(
+    ws: WebSocket,
+    attachment: Attachment,
+    msg: Extract<ClientMessage, { type: "generate_story" }>,
+  ): Promise<void> {
+    if (attachment.kind !== "host") {
+      this.sendRejection(ws, "not_host");
+      return;
+    }
+
+    const story = await this.getStoryState();
+    if (!story.enabled) {
+      this.sendStoryError(ws, msg.requestId, "disabled");
+      return;
+    }
+
+    const game = await this.ctx.storage.get<GameState>(GAME_KEY);
+    const currentPhase = game?.phase;
+    const currentGen = game?.phaseGen;
+    if (currentPhase !== BEAT_PHASE[msg.beat]) {
+      this.sendStoryError(ws, msg.requestId, "wrong_phase");
+      return;
+    }
+    if (currentGen !== msg.phaseGen) {
+      this.sendStoryError(ws, msg.requestId, "stale_story");
+      return;
+    }
+
+    // Queue-of-one: an in-flight record younger than the stale bound blocks a
+    // second concurrent generation for this room.
+    const inflight = await this.ctx.storage.get<StoryInflightRecord>(STORY_INFLIGHT_KEY);
+    if (inflight && Date.now() - inflight.startedAt < STORY_INFLIGHT_STALE_MS) {
+      this.sendStoryError(ws, msg.requestId, "busy");
+      return;
+    }
+
+    const rateLimited = await this.isStoryRateLimited();
+    if (rateLimited) {
+      this.sendStoryError(ws, msg.requestId, "rate_limited");
+      return;
+    }
+
+    // Re-spin (a fresh generate_story for the SAME beat as an existing
+    // pending draft): the replaced draft is DROPPED, never committed
+    // (§Product shape Keep semantics) — only ever one pending draft per beat.
+    for (const [id, draft] of this.pendingDrafts) {
+      if (draft.beat === msg.beat) this.pendingDrafts.delete(id);
+    }
+
+    const record: StoryInflightRecord = {
+      requestId: msg.requestId,
+      beat: msg.beat,
+      phaseGen: msg.phaseGen,
+      startedAt: Date.now(),
+    };
+    await this.ctx.storage.put(STORY_INFLIGHT_KEY, record);
+    await this.recordStoryGeneration();
+
+    const players = await this.getPlayers();
+    const nameOf = (playerId: string) => players.find((p) => p.id === playerId)?.name ?? playerId;
+    // THE choke point: `{kind:"public"}` — see THE LEAK CONTRACT above.
+    const view = projectFor(game!, { kind: "public" });
+
+    let output: Awaited<ReturnType<typeof this.runStoryGeneration>>;
+    try {
+      output = await this.runStoryGeneration(view, msg.beat, nameOf, story);
+    } finally {
+      // Clear the in-flight record regardless of outcome so a genuine
+      // success/failure never leaves the room falsely "busy" — the stale
+      // bound above is only a backstop for an evicted DO, not the normal path.
+      const current = await this.ctx.storage.get<StoryInflightRecord>(STORY_INFLIGHT_KEY);
+      if (current?.requestId === record.requestId) {
+        await this.ctx.storage.delete(STORY_INFLIGHT_KEY);
+      }
+    }
+
+    if (!output) {
+      this.sendToHostSockets({ type: "story_error", requestId: msg.requestId, code: "generation_failed" });
+      return;
+    }
+
+    // The draft TEXT is memory-only (never persisted) until auto-commit; it
+    // rides straight to host sockets here and the caller (host UI) holds it
+    // client-side until the beat is superseded.
+    this.pendingDrafts.set(msg.requestId, {
+      requestId: msg.requestId,
+      beat: msg.beat,
+      phaseGen: msg.phaseGen,
+      day: view.day,
+      text: output.scene,
+      bibleUpdates: output.bibleUpdates,
+    });
+    this.sendToHostSockets({ type: "story_draft", requestId: msg.requestId, beat: msg.beat, phaseGen: msg.phaseGen, text: output.scene });
+  }
+
+  /** Runs (or fakes) the actual generation. Isolated so the try/finally above
+   * always clears the in-flight record even if this throws. */
+  private async runStoryGeneration(
+    view: ReturnType<typeof projectFor>,
+    beat: BeatId,
+    nameOf: (id: string) => string,
+    story: StoryState,
+  ): Promise<{ scene: string; bibleUpdates: Record<string, string> } | null> {
+    const facts = buildStoryFacts(view, beat, nameOf);
+    const memory: StoryMemory = { bible: story.bible, scenes: story.scenes };
+    const settings: StorySettings = story.settings;
+
+    if (this.env.STORYTELLER_FAKE === "1") {
+      return fakeStoryOutput(facts);
+    }
+
+    const { system, user } = buildPrompt({ settings, memory, facts });
+    try {
+      // The model id is a runtime `STORYTELLER_MODEL` var, not a literal
+      // type `Ai.run`'s overloads key on — call through a loosely-typed
+      // handle rather than fighting the generated binding's model-name
+      // overload resolution. `parseStoryOutput` defensively handles whatever
+      // shape comes back regardless.
+      const ai = this.env.AI as unknown as { run: (model: string, inputs: unknown) => Promise<unknown> };
+      const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), STORY_AI_TIMEOUT_MS));
+      const call = ai.run(this.env.STORYTELLER_MODEL, {
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        max_tokens: 600,
+        temperature: 0.8,
+      });
+      const raced = await Promise.race([call, timeout]);
+      if (raced === null) return null; // timed out
+      return parseStoryOutput(raced);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Host-only: drops the pending draft for `requestId` — nothing commits.
+   * A discard for an unknown/already-superseded requestId is a harmless
+   * no-op (the draft is already gone either way). */
+  private async handleDiscardStory(
+    ws: WebSocket,
+    attachment: Attachment,
+    msg: Extract<ClientMessage, { type: "discard_story" }>,
+  ): Promise<void> {
+    if (attachment.kind !== "host") {
+      this.sendRejection(ws, "not_host");
+      return;
+    }
+    this.pendingDrafts.delete(msg.requestId);
+  }
+
+  /** Auto-keep (spec §Product shape): the latest non-discarded draft for a
+   * beat commits automatically when superseded — by a `generate_story` for a
+   * DIFFERENT beat (handled implicitly: only one draft is ever pending, keyed
+   * by requestId, and a new `generate_story` call overwrites it after
+   * committing the old one here), a phase advance past the beat's legal
+   * phase, or game end. Fire-safe: wrapped so a storyState write failure can
+   * never block/fail the phase advance it piggybacks on, and it runs
+   * STRICTLY AFTER the game-state transition (called from `applyGameResult`,
+   * after the storage put + broadcast are queued). */
+  private async autoCommitSupersededDrafts(newPhase: string, newGen: number): Promise<void> {
+    if (this.pendingDrafts.size === 0) return;
+    try {
+      const story = await this.getStoryState();
+      let next = story;
+      let changed = false;
+      for (const draft of this.pendingDrafts.values()) {
+        const legalPhase = BEAT_PHASE[draft.beat];
+        const stillLegal = newPhase === legalPhase && draft.phaseGen === newGen;
+        if (stillLegal) continue; // beat hasn't been superseded yet
+        next = commitDraft(next, draft);
+        changed = true;
+        this.pendingDrafts.delete(draft.requestId);
+      }
+      if (changed) await this.ctx.storage.put(STORY_STATE_KEY, next);
+    } catch {
+      // Fire-safe: a storyState write failure must never surface as a
+      // phase-advance failure. The draft is simply lost; the host re-spins.
+    }
+  }
+
+  /** Rate limit: 10 generations/min per room, DO-side `Date.now()` (server
+   * layer, not engine — fine per spec). Stored as a rolling list of
+   * timestamps; pruned on every check. */
+  private async isStoryRateLimited(): Promise<boolean> {
+    const key = "storyRateLimit";
+    const now = Date.now();
+    const timestamps = ((await this.ctx.storage.get<number[]>(key)) ?? []).filter((t) => now - t < 60_000);
+    return timestamps.length >= STORY_RATE_LIMIT_PER_MIN;
+  }
+
+  private async recordStoryGeneration(): Promise<void> {
+    const key = "storyRateLimit";
+    const now = Date.now();
+    const timestamps = ((await this.ctx.storage.get<number[]>(key)) ?? []).filter((t) => now - t < 60_000);
+    timestamps.push(now);
+    await this.ctx.storage.put(key, timestamps);
+  }
+
+  /** Sends `msg` to every currently-connected HOST socket (multi-host-device
+   * is real: `hostConnected` is an OR today, never a count). Pattern-matched
+   * to `handleKick`/`handleLeave`'s `socketsFor` + iterate + send. Player
+   * sockets are NEVER a valid target for this helper — leak-tested. */
+  private sendToHostSockets(msg: ServerMessage): void {
+    for (const sock of socketsFor(this.ctx, (a) => a.kind === "host")) {
+      this.send(sock, msg);
+    }
+  }
+
+  private sendStoryError(ws: WebSocket, requestId: string, code: Extract<ServerMessage, { type: "story_error" }>["code"]): void {
+    // story_error is host-only by contract, but this call site always
+    // originates from a host-authenticated command — send directly to the
+    // issuing socket (mirrors sendRejection) rather than broadcasting.
+    this.send(ws, { type: "story_error", requestId, code });
   }
 
   /** Apply-persist-broadcast, in that order, atomically per message: no
@@ -770,6 +1130,11 @@ export class GameRoom extends DurableObject<Env> {
     await this.ctx.storage.put(GAME_KEY, result.state);
     await this.ctx.storage.put(ROOM_KEY, meta);
     await this.applyEffects(result.effects);
+
+    // Spec 15 auto-keep: runs STRICTLY AFTER the game-state transition above,
+    // fire-safe (a storyState write failure here can never fail this phase
+    // advance — see autoCommitSupersededDrafts's own try/catch).
+    await this.autoCommitSupersededDrafts(result.state.phase, result.state.phaseGen);
 
     await this.touchAndBroadcast({ skipActivity: true });
   }
@@ -978,6 +1343,12 @@ export class GameRoom extends DurableObject<Env> {
       ? null
       : ((await this.ctx.storage.get<Ruleset>(PENDING_RULESET_KEY)) ?? null);
 
+    // Spec 15 (M5): host-only field — populated ONLY for a host viewer, never
+    // for a player (leak-tested). Carries settings + bible + KEPT scenes
+    // only; a pending draft never rides here (it's ephemeral, delivered via
+    // `story_draft` instead).
+    const story = viewer.kind === "host" ? await this.getStoryState() : null;
+
     return {
       roomCode: room.code,
       phase: game ? game.phase : "lobby",
@@ -986,6 +1357,7 @@ export class GameRoom extends DurableObject<Env> {
       createdAt: room.createdAt,
       game: gameView,
       pendingRuleset: pendingRuleset as ClientRoomState["pendingRuleset"],
+      story,
     };
   }
 

@@ -35,6 +35,7 @@ import { setRuleset as sendSetRuleset } from "../../store/gameStore";
 import { hostSeatRows } from "../../store/hostView";
 import { PlayerTable } from "./PlayerTable";
 import PrivacyChip from "./PrivacyChip";
+import { StorytellerSetupButton } from "./Storyteller";
 
 const SET_RULESET_DEBOUNCE_MS = 250;
 
@@ -277,6 +278,7 @@ export default function HostLobby({
         <Button type="button" data-testid="copy-link" onClick={onCopyLink} variant="outline">
           Share link
         </Button>
+        <StorytellerSetupButton story={state.story} />
       </div>
 
       <div className="grid w-full grid-cols-1 gap-6 md:grid-cols-2">

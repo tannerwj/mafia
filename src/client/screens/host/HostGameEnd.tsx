@@ -11,6 +11,7 @@ import { roleCopyFor } from "../../lib/roleCopy";
 import { newGame } from "../../store/gameStore";
 import PrivacyChip from "./PrivacyChip";
 import HostLog from "./HostLog";
+import { StorytellerPanel } from "./Storyteller";
 
 // Verdict copy — the winner substrings the E2E asserts on in
 // host-winner-splash ("village"/"mafia") are preserved exactly.
@@ -71,7 +72,10 @@ export default function HostGameEnd({ room, game }: { room: ClientRoomState; gam
           })}
         </ul>
 
-        <HostLog game={game} playerNames={playerNames} />
+        <div className="flex flex-col gap-4">
+          <StorytellerPanel story={room.story} legalBeat="epilogue" phaseGen={game.phaseGen} />
+          <HostLog game={game} playerNames={playerNames} />
+        </div>
       </div>
 
       <Button

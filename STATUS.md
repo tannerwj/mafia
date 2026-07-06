@@ -411,3 +411,33 @@ history above, and `CLAUDE.md` (operating rules + "process rules learned").
 - Spec 14 DEPLOYED to mafia.tannerwj.com (version 12092f93), Tanner-
   approved; prod 200, wakeLock in live bundle. Real-phone check at next
   playtest.
+
+## 2026-07-06 — SPEC 15 BUILT: AI narrator ("The Storyteller")
+- Full ceremony: spec v1 → adversarial review (NEEDS REDESIGN: missing
+  env.AI binding; sunrise beat wanted unresolved facts) → v2 fold →
+  re-review (10/11 RESOLVED + ctx.storage coordination fix) → v3 →
+  Tanner sign-off (all beats · auto-keep · model-only bible · 5 tones)
+  → 3-round model bake-off (Tanner: free models, punchy 50-90 words,
+  no roll-call, faster) → Llama 4 Scout picked
+  (@cf/meta/llama-4-scout-17b-16e-instruct, STORYTELLER_MODEL var).
+  Bake-off finding worth remembering: Qwen3 fast-mode (/no_think) is the
+  best line-writer but narrated the victim ALIVE in a death report;
+  Scout kept facts straight at 3-4s/scene.
+- Build (spec15-build, codex): src/server/storyteller.ts (leak choke
+  point — engine-import-free by construction, BEAT_PHASE structural
+  guard, prompt contract, defensive parsing, fake mode), game-room.ts
+  (eager storyState, ctx.storage in-flight record, sendToHostSockets,
+  auto-commit fire-safe hooks, rate limit), protocol story_* messages +
+  host-gated ClientRoomState.story, Storyteller.tsx host UI. Deviations
+  (accepted, in 15-implementation-notes.md): FIFO scene-trim instead of
+  model-written summary folding (no second AI call in v1); loose-typed
+  AI.run handle; per-beat pending-draft dedup (real double-commit bug
+  caught by its own test).
+- Verified fresh by orchestrator: leak seams inspected in code; typecheck
+  clean; engine 175 / client 32 / server 90 (48 new, incl. leak proofs,
+  DO-eviction queue survival, fire-safe commit); E2E 44/45 → the 1
+  failure was an over-strict test assertion (naming a publicly-alive
+  player pre-reveal is not a leak), fixed → ai-narrator 4/4, full gate
+  effectively 45/45.
+- NOT yet deployed. Live verification pending: real Scout generations on
+  prod at all three beat families after Tanner's deploy go-ahead.

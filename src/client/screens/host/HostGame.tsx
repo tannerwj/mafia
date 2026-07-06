@@ -17,6 +17,7 @@ import { PlayerTable } from "./PlayerTable";
 import PrivacyChip from "./PrivacyChip";
 import HostLog from "./HostLog";
 import NarratorBoard from "./NarratorBoard";
+import { legalBeatForPhase, StorytellerPanel, StorytellerSetupButton } from "./Storyteller";
 
 function PhaseHeader({ game, rows }: { game: ClientGameView; rows: ReturnType<typeof hostSeatRows> }) {
   return (
@@ -136,6 +137,7 @@ export default function HostGame({ room, game }: { room: ClientRoomState; game: 
           <h1 className="file-heading text-xl text-blood">The Case Board</h1>
         </div>
         <div className="flex items-center gap-2">
+          <StorytellerSetupButton story={room.story} />
           <HelpButton />
           <PrivacyChip />
         </div>
@@ -162,6 +164,7 @@ export default function HostGame({ room, game }: { room: ClientRoomState; game: 
             <Controls game={game} />
           </div>
           <NarratorBoard game={game} rows={rows} playerNames={playerNames} />
+          <StorytellerPanel story={room.story} legalBeat={legalBeatForPhase(game.phase)} phaseGen={game.phaseGen} />
           <HostLog game={game} playerNames={playerNames} />
         </div>
       </div>

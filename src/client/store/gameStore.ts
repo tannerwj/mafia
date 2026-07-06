@@ -7,7 +7,7 @@
 // (300ms fade), and is never read for any game-logic decision.
 import { toast } from "sonner";
 import { create } from "zustand";
-import type { ClientMessage, ClientRoomState, ErrorMessage } from "../../shared/protocol";
+import type { BeatId, ClientMessage, ClientRoomState, ErrorMessage, Tone } from "../../shared/protocol";
 import type { Phase } from "../../shared/game-view";
 import type { Auth, ConnectionStatus, WelcomeInfo } from "../net/RoomConnection";
 import { RoomConnection } from "../net/RoomConnection";
@@ -45,6 +45,31 @@ function rejectionMessage(code: string): string {
   return REJECTION_COPY[code] ?? `Rejected: ${code}`;
 }
 
+/** Spec 15. Human copy for `story_error` codes — surfaced in the draft panel,
+ * not as a toast (the Storyteller card is where the host is already looking
+ * when this fires). */
+const STORY_ERROR_COPY: Record<string, string> = {
+  disabled: "The Storyteller is off. Turn it on in the setup card first.",
+  busy: "Already spinning a tale — hang tight.",
+  rate_limited: "Too many scenes too fast — give it a minute.",
+  stale_story: "The scene moved on before this one finished.",
+  wrong_phase: "There's no scene to spin right now.",
+  generation_failed: "The muse is silent — try again.",
+};
+
+/** Spec 15. A not-yet-committed draft, held ONLY in client state (§Memory:
+ * "pending drafts are ephemeral by design") — a reload loses it; the host
+ * simply re-spins. `status` tracks the round trip; `error` is set instead of
+ * `text` on a `story_error` reply for this requestId. */
+export interface StoryDraft {
+  requestId: string;
+  beat: BeatId;
+  phaseGen: number;
+  status: "pending" | "ready" | "error";
+  text?: string;
+  error?: string;
+}
+
 interface GameStoreState {
   connection: ConnectionStatus;
   room: ClientRoomState | null;
@@ -62,6 +87,11 @@ interface GameStoreState {
    * on every message, not just once per connection, so a long-lived
    * connection's drift correction stays fresh. */
   clockOffsetMs: number;
+  /** Spec 15. The current draft-in-flight-or-ready, host-console-only,
+   * ephemeral (never rides a snapshot). `null` once discarded/committed/
+   * dropped-as-stale. Only one at a time — a fresh `generate_story` (Re-spin
+   * included) replaces it, mirroring the server's own queue-of-one. */
+  storyDraft: StoryDraft | null;
 
   connect: (code: string, auth: Auth, hooks?: RoomLifecycleHooks) => RoomConnection;
   disconnect: () => void;
@@ -82,6 +112,7 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
   lastError: null,
   conn: null,
   clockOffsetMs: 0,
+  storyDraft: null,
 
   connect: (code, auth, hooks) => {
     get().conn?.close();
@@ -112,14 +143,40 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
         hooks?.onWelcome?.(info);
       },
       onSnapshot: (state, serverNow) => {
-        set((s) => ({
-          room: state,
-          previousPhase: s.room?.phase ?? state.phase,
-          clockOffsetMs: serverNow - Date.now(),
-        }));
+        set((s) => {
+          // Spec 15: a slow draft for a beat the game has since moved past
+          // renders nowhere — drop it the moment phaseGen advances beyond
+          // what the draft was generated for (mirrors the server's own
+          // phaseGen staleness check on the way in).
+          const currentGen = state.game?.phaseGen;
+          const draftIsStale = s.storyDraft && currentGen !== undefined && currentGen !== s.storyDraft.phaseGen;
+          return {
+            room: state,
+            previousPhase: s.room?.phase ?? state.phase,
+            clockOffsetMs: serverNow - Date.now(),
+            storyDraft: draftIsStale ? null : s.storyDraft,
+          };
+        });
       },
       onRejection: (rejection) => {
         toast(rejectionMessage(rejection.code));
+      },
+      onStoryDraft: (msg) => {
+        set((s) => {
+          // A draft only replaces the CURRENT one if it's still the request
+          // we're waiting on (a Re-spin already moved storyDraft to a newer
+          // requestId, or a Discard already cleared it — either way an
+          // in-flight response for the OLD request must not clobber that).
+          if (s.storyDraft && s.storyDraft.requestId !== msg.requestId) return {};
+          return { storyDraft: { requestId: msg.requestId, beat: msg.beat, phaseGen: msg.phaseGen, status: "ready", text: msg.text } };
+        });
+      },
+      onStoryError: (msg) => {
+        set((s) => {
+          if (s.storyDraft && s.storyDraft.requestId !== msg.requestId) return {};
+          if (!s.storyDraft) return {};
+          return { storyDraft: { ...s.storyDraft, status: "error", error: STORY_ERROR_COPY[msg.code] ?? msg.code } };
+        });
       },
       onError: (err) => {
         set({ lastError: err });
@@ -148,6 +205,7 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
       lastError: null,
       conn: null,
       clockOffsetMs: 0,
+      storyDraft: null,
     });
   },
 
@@ -232,6 +290,30 @@ export function startGame(ruleset: unknown, seed?: number): void {
 
 export function newGame(): void {
   useGameStore.getState().send({ type: "new_game" });
+}
+
+// ---------------------------------------------------------------------------
+// Spec 15 — Storyteller intent helpers. `generateStory` mints its own
+// `requestId` (crypto.randomUUID) and optimistically sets the local
+// `storyDraft` to "pending" — the server's `story_draft`/`story_error` reply
+// resolves it (or a snapshot drops it if the beat goes stale first).
+// ---------------------------------------------------------------------------
+
+export function setStorySettings(enabled: boolean, theme: string, tone: Tone): void {
+  useGameStore.getState().send({ type: "set_story_settings", enabled, theme, tone });
+}
+
+export function generateStory(beat: BeatId, phaseGen: number): void {
+  const requestId = crypto.randomUUID();
+  useGameStore.setState({ storyDraft: { requestId, beat, phaseGen, status: "pending" } });
+  useGameStore.getState().send({ type: "generate_story", beat, phaseGen, requestId });
+}
+
+export function discardStory(): void {
+  const draft = useGameStore.getState().storyDraft;
+  if (!draft) return;
+  useGameStore.getState().send({ type: "discard_story", requestId: draft.requestId });
+  useGameStore.setState({ storyDraft: null });
 }
 
 /** Drift-corrected "now" — `Date.now()` plus the offset sampled from the

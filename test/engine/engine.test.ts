@@ -1359,3 +1359,121 @@ describe("Spec 12: game-status aggregates + narrator board history", () => {
     expect(today.dayVotes.find((v) => v.voterId === ids[0]!)?.target).toBe(ids[1]!);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spec 15 — dedicated `{kind:"public"}` coverage. This is the projection's
+// first PRODUCT caller (Spec 15's `buildStoryFacts` reads exactly this
+// output — src/server/storyteller.ts); `{kind:"public"}` itself already had
+// same-file spot-check coverage above (join-order, no-pending-count,
+// rolesRemaining aggregate, watch-target leak) — this block adds the fields
+// the AI narrator specifically depends on: `god` false pre-`ended`, no `you`,
+// graveyard per `revealOnDeath`, tallies per `votingVisibility`, and log
+// filtering identical to what a living player sees.
+// ---------------------------------------------------------------------------
+describe("Spec 15: {kind:'public'} projection — the AI narrator's sole input", () => {
+  test("god is false pre-ended regardless of any dead player existing, and flips true only at game end", () => {
+    let s = start(5, rules({ mafia: 1, villager: 2, angel: 1, detective: 1 }), 9);
+    const mafia = byRole(s, "mafia");
+    const angel = byRole(s, "angel");
+    const detective = byRole(s, "detective");
+    const target = s.players.find((p) => p.id !== mafia.id && p.id !== angel.id && p.id !== detective.id)!;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia.id }).state;
+    s = settleDecoys(s, [angel.id, detective.id]);
+    s = applyCommand(s, { type: "submitAction", playerId: angel.id, targetId: mafia.id }).state; // no protection -> kill lands
+    s = applyCommand(s, { type: "lockAction", playerId: angel.id }).state;
+    s = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: mafia.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: detective.id }).state;
+    expect(s.phase).toBe("dawn");
+
+    const publicAtDawn = projectFor(s, { kind: "public" });
+    // A player is now dead (target). god must still be FALSE at a non-ended
+    // phase — the dead-player god carve-out must not leak through a viewer
+    // that structurally has no `viewerPlayer` match (Spec 15 review finding).
+    expect(publicAtDawn.players.find((p) => p.id === target.id)?.alive).toBe(false);
+    for (const p of publicAtDawn.players) {
+      if (p.id !== target.id) {
+        expect(p.roleId).toBeUndefined();
+        expect(p.alignment).toBeUndefined();
+      }
+    }
+
+    s = force(s); // -> day
+    s = voteOut(s, mafia.id); // eliminating the sole mafia ends the game
+    expect(s.phase).toBe("ended");
+    const publicAtEnd = projectFor(s, { kind: "public" });
+    // At `ended` the public projection IS legitimately god (winners/roles
+    // public at game over — Spec 15's epilogue beat, not a leak).
+    expect(publicAtEnd.players.every((p) => p.roleId !== undefined)).toBe(true);
+    expect(publicAtEnd.winners).not.toBeNull();
+  });
+
+  test("public projection carries no `you` block ever (no viewer identity to leak)", () => {
+    const s = start(5, rules({ mafia: 1, villager: 4 }), 5);
+    expect(projectFor(s, { kind: "public" }).you).toBeUndefined();
+  });
+
+  test("graveyard on the public view follows revealOnDeath exactly like a living player's", () => {
+    for (const revealOnDeath of ["full", "alignment", "none"] as const) {
+      let s = toDay(start(5, rules({ mafia: 1, villager: 4 }, { firstNightKill: false, revealOnDeath }), 5));
+      const victim = living(s)[0]!.id;
+      s = voteOut(s, victim);
+      const publicView = projectFor(s, { kind: "public" });
+      const livingView = projectFor(s, { kind: "player", id: living(s)[0]!.id });
+      const pubEntry = publicView.graveyard.find((g) => g.playerId === victim);
+      const liveEntry = livingView.graveyard.find((g) => g.playerId === victim);
+      expect(pubEntry).toEqual(liveEntry);
+      if (revealOnDeath === "full") expect(pubEntry?.roleId).toBeDefined();
+      if (revealOnDeath === "alignment") {
+        expect(pubEntry?.roleId).toBeUndefined();
+        expect(pubEntry?.alignment).toBeDefined();
+      }
+      if (revealOnDeath === "none") {
+        expect(pubEntry?.roleId).toBeUndefined();
+        expect(pubEntry?.alignment).toBeUndefined();
+      }
+    }
+  });
+
+  test("vote tallies on the public view are gated by votingVisibility identically to a living player's", () => {
+    for (const votingVisibility of ["hidden", "realtime"] as const) {
+      let s = toDay(start(5, rules({ mafia: 1, villager: 4 }, { firstNightKill: false, votingVisibility }), 5));
+      s = applyCommand(s, { type: "castVote", playerId: living(s)[0]!.id, target: living(s)[1]!.id }).state;
+      const publicView = projectFor(s, { kind: "public" });
+      const livingView = projectFor(s, { kind: "player", id: living(s)[2]!.id });
+      expect(publicView.votes !== undefined).toBe(votingVisibility === "realtime");
+      expect(publicView.votes !== undefined).toBe(livingView.votes !== undefined);
+    }
+    // voteResolved (eliminatedId/reason) is ALWAYS public regardless of
+    // votingVisibility — only the per-candidate tallies are gated (Spec 15
+    // leak contract correction, M4).
+    let s = toDay(start(5, rules({ mafia: 1, villager: 4 }, { firstNightKill: false, votingVisibility: "hidden" }), 5));
+    const target = living(s)[0]!.id;
+    s = voteOut(s, target);
+    const publicView = projectFor(s, { kind: "public" });
+    expect(publicView.log).toContainEqual(expect.objectContaining({ type: "voteResolved", eliminatedId: target }));
+  });
+
+  test("public log filtering matches a living player's exactly — no actionSubmitted/acknowledged/hidden-vote leakage", () => {
+    let s = start(5, rules({ mafia: 1, villager: 2, angel: 1, detective: 1 }, { votingVisibility: "hidden" }), 9);
+    const mafia = byRole(s, "mafia");
+    const angel = byRole(s, "angel");
+    const detective = byRole(s, "detective");
+    const target = s.players.find((p) => p.id !== mafia.id && p.id !== angel.id && p.id !== detective.id)!;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia.id }).state;
+    s = applyCommand(s, { type: "submitAction", playerId: angel.id, targetId: target.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: angel.id }).state;
+    s = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: mafia.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: detective.id }).state;
+    s = settleDecoys(s);
+    for (const p of living(s)) {
+      s = applyCommand(s, { type: "acknowledge", playerId: p.id, gen: s.phaseGen }).state;
+    }
+    const publicLog = projectFor(s, { kind: "public" }).log;
+    const livingLog = projectFor(s, { kind: "player", id: living(s)[0]!.id }).log;
+    expect(publicLog).toEqual(livingLog);
+    expect(publicLog.some((e) => e.type === "actionSubmitted")).toBe(false);
+    expect(publicLog.some((e) => e.type === "acknowledged")).toBe(false);
+  });
+});
