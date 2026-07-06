@@ -212,6 +212,43 @@ Return BLOCKER/SHOULD-FIX/CONSIDER with section refs + concrete resolutions.
 line + your project's hard rules (data hygiene, read-only boundaries,
 secret handling) + a "process rules learned" section that grows.
 
+## 10b. Throughput: cut waste, not corners (learned 2026-07-05)
+
+The orchestrator model's cost is latency — everything is delegated + verified,
+so a lazy loop wastes far more wall-clock than a solo dev would. When the
+human says "this is taking too long," the fix is almost never "cut rigor"
+(the rigor catches the expensive bugs) — it's eliminating waste *around* an
+unchanged pipeline:
+
+- **Isolation, not serialization.** Collisions come from two runners sharing
+  ONE dev-server port + ONE state dir — not from parallelism. Give each
+  concurrent build/verify its own port (`--port N --strictPort`) and its own
+  DO state dir; then parallel worktrees/servers are safe and fast. The
+  standing rule is "never two runners on the same port/state," NOT "only ever
+  one runner." The orchestrator's own most common self-inflicted delay is
+  starting a verification while a delegated agent still holds the shared
+  server, or wiping state under a live server — both are collisions, both are
+  avoidable, both masquerade as "flaky infra."
+- **Tier the ceremony to risk, never the verification.** Correctness-critical
+  work (engine, protocol, anything that can leak hidden state or hang the
+  game) gets the full spec → adversarial-review → delegated-build → full
+  independent-verify. Genuinely low-risk work (copy, metadata, favicon,
+  styling) is still delegated and still verified, but skips the
+  adversarial-review round and runs targeted tests + a visual check instead
+  of the whole (often slow/flaky) suite. Classify honestly: a "UI" change
+  with a leak surface (who-can-see-what) is correctness-critical, not
+  low-risk.
+- **Batch related feedback** into one spec/build/deploy cycle; don't run a
+  full cycle per bullet point.
+- **Watchdogs: prefer the agent's own completion signal.** Delegated agents
+  reliably fire a completion/idle notification; lean on that as the primary
+  wake, plus ONE long backstop — not a chain of short polling waits. (Env
+  note: long background shell waits here died at a ~15-min harness limit
+  [exit 144]; size a single backstop under that or rely on the notification.)
+  Judge completion by artifacts on disk (files + a STATUS marker in the notes
+  file), never by wrapper chatter — wrapper agents go idle without reporting
+  and reports cross in transit.
+
 ## 11. Iterating on the playbook itself
 
 This document is a snapshot of a living process. The meta-rule: every time

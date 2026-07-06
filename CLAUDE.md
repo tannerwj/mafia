@@ -68,9 +68,19 @@ scaffold** (generator-driven, needs network). Never application logic.
   then go idle with "I'll let you know" — the notification you get is the
   wrapper stopping, not the work finishing. Judge completion by artifacts on
   disk (files + implementation notes), never by wrapper chatter.
-- 2026-07-04: Playwright runs collide on the shared :5173 dev server
-  (strictPort + reuseExistingServer): orchestrator and implementer running
-  the suite concurrently produce phantom flakes and nonsense test counts.
-  Rule: one runner at a time — coordinate via the notes-file STATUS marker;
-  kill stray vite/headless-chromium processes before every E2E run and
-  after every tour.
+- 2026-07-04: Playwright runs collide on a SHARED :5173 dev server + shared
+  .wrangler/state — concurrent runs produce phantom flakes/nonsense counts.
+  The rule is ISOLATION not serialization: never two runners on the same
+  port/state; give each its own `--port N --strictPort` + own state dir and
+  parallel is fine. Never start a verify while a delegated agent holds the
+  shared server; never `rm -rf .wrangler/state` under a live server.
+- 2026-07-05 (throughput, per Tanner): orchestrator stays orchestrator
+  (delegate implementation, own verification/deploy) — DON'T jump into the
+  code to go faster, DON'T cut verification. Speed comes from cutting waste:
+  (a) isolation over serialization (above); (b) TIER the ceremony to risk —
+  correctness/leak-critical = full spec+adversarial-review+verify; low-risk
+  UI/copy/metadata = delegated+verified but no review round + targeted tests;
+  (c) batch related feedback into one cycle; (d) watchdogs: rely on the
+  agent's completion notification + ONE backstop, not chains of short polls
+  (long background waits die at ~15min/exit-144). Keep folding lessons into
+  docs/ORCHESTRATION-PLAYBOOK.md §10b as we learn.
