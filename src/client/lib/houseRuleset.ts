@@ -25,6 +25,7 @@ export const HOUSE_RULESET = {
   revealOnDeath: "full",
   parityRule: "immediate",
   votingVisibility: "hidden",
+  scenePhases: false,
   timers: {},
   dawnDuskBeatMs: 3000,
 } as const;

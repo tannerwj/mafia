@@ -17,6 +17,11 @@ export interface Ruleset {
   revealOnDeath: RevealOnDeath;
   parityRule: ParityRule;
   votingVisibility: "hidden" | "realtime";
+  // Spec 12 Feature 2: optional narrator-gated reveal beats. When true, a ready
+  // night transitions to `sunrise` (UNRESOLVED) and a ready day vote to
+  // `sunset` (UNRESOLVED); the host taps `reveal` to run resolution and
+  // continue. Default false → the phase sequence is byte-identical to Spec 11.
+  scenePhases: boolean;
   timers: { night?: number; day?: number; voting?: number; runoff?: number };
   dawnDuskBeatMs: number;
 }
@@ -44,6 +49,7 @@ export const HOUSE_RULES: Ruleset = {
   revealOnDeath: "full",
   parityRule: "immediate",
   votingVisibility: "hidden",
+  scenePhases: false,
   timers: {},
   dawnDuskBeatMs: 3000,
 };

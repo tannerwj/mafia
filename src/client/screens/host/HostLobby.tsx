@@ -42,11 +42,12 @@ function countsFromRuleset(roles: Record<string, number | "auto">): Counts {
 }
 
 // The wire ruleset: explicit editable counts + villager as the auto remainder,
-// every other field inherited from the house ruleset (only counts are
-// editable this round — Spec 11 non-goal).
-function rulesetFromCounts(counts: Counts): Ruleset {
+// plus the Spec 12 scenePhases toggle; every other field inherited from the
+// house ruleset.
+function rulesetFromCounts(counts: Counts, scenePhases: boolean): Ruleset {
   return {
     ...HOUSE_RULES,
+    scenePhases,
     roles: {
       villager: "auto",
       mafia: counts.mafia ?? 1,
@@ -170,10 +171,15 @@ export default function HostLobby({
   const [counts, setCounts] = useState<Counts>(() =>
     countsFromRuleset(state.pendingRuleset?.roles ?? HOUSE_RULES.roles),
   );
+  // Spec 12: the sunrise/sunset toggle. Seeded from the broadcast pending
+  // ruleset so a reconnecting host keeps their choice; defaults off.
+  const [scenePhases, setScenePhases] = useState<boolean>(
+    () => (state.pendingRuleset?.scenePhases as boolean | undefined) ?? HOUSE_RULES.scenePhases,
+  );
 
   const editableTotal = EDITABLE_ROLES.reduce((sum, r) => sum + (counts[r.id] ?? 0), 0);
   const villagers = Math.max(0, playerCount - editableTotal);
-  const ruleset = useMemo(() => rulesetFromCounts(counts), [counts]);
+  const ruleset = useMemo(() => rulesetFromCounts(counts, scenePhases), [counts, scenePhases]);
   const validation = validateRuleset(ruleset, playerCount);
   const canStart = playerCount >= 3 && validation.errors.length === 0;
   const startBlockedReason =
@@ -241,6 +247,29 @@ export default function HostLobby({
             playerCount={playerCount}
             onChange={handleCount}
           />
+          <button
+            type="button"
+            data-testid="scene-phases-toggle"
+            role="switch"
+            aria-checked={scenePhases}
+            onClick={() => setScenePhases((v) => !v)}
+            className="flex min-h-11 items-center justify-between gap-3 rounded-sm border border-frame bg-ink-3 px-3 py-2 text-left"
+          >
+            <span className="flex flex-col">
+              <span className="text-sm text-paper">Sunrise / sunset scenes</span>
+              <span className="text-[0.7rem] text-smoke">
+                // Narrator taps Reveal to set each scene aloud. In-person pacing.
+              </span>
+            </span>
+            <span
+              aria-hidden
+              className={`flex h-6 w-11 shrink-0 items-center rounded-full border px-0.5 transition-colors ${
+                scenePhases ? "justify-end border-brass bg-ink" : "justify-start border-frame bg-ink-2"
+              }`}
+            >
+              <span className={`h-4 w-4 rounded-full ${scenePhases ? "bg-brass-hi" : "bg-smoke"}`} />
+            </span>
+          </button>
           <Button
             type="button"
             data-testid="start-game"

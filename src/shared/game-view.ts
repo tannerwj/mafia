@@ -4,7 +4,13 @@
 
 export type RoleId = string;
 export type PlayerId = string;
-export type Phase = "night" | "dawn" | "day" | "runoff" | "dusk" | "ended";
+// Spec 12: `sunrise`/`sunset` are the optional narrator-gated reveal beats
+// (present ONLY when `ruleset.scenePhases` is on). They are DEFERRED-RESOLUTION
+// holding states: the night/day is genuinely UNRESOLVED while in them (nothing
+// computed, so nothing can leak), until the host taps `reveal`. `sunrise` sits
+// between a ready night and its resolution+dawn; `sunset` between a ready day
+// vote and its resolution+dusk.
+export type Phase = "night" | "sunrise" | "dawn" | "day" | "runoff" | "sunset" | "dusk" | "ended";
 export type AttackTier = "basic" | "powerful" | "unstoppable";
 export type DefenseTier = "none" | "basic" | "powerful" | "invincible";
 // `"watch"` (Spec 11) is the inert decoy action: a no-action role
@@ -38,6 +44,43 @@ export type GameEvent =
   | { type: "gameEnded"; winners: string[]; reason: string };
 
 export type Viewer = { kind: "player"; id: PlayerId } | { kind: "host" } | { kind: "public" };
+
+// Spec 12 Feature 3: all-player game status. Exposed to EVERY viewer.
+// `rolesRemaining` is AGGREGATE-ONLY — `{roleId, count}` per alive role, NEVER
+// a per-living-player array (even name-stripped: player order is join order, so
+// a positional per-player list would let a client map position→identity). This
+// is Tanner's explicit transparency choice (2026-07-05): full counts always,
+// regardless of `revealOnDeath`.
+export interface RoleCount {
+  roleId: RoleId;
+  count: number;
+}
+
+// Spec 12 Feature 3: one graveyard entry per dead player, role shown per
+// `revealOnDeath` (full → roleId+alignment, alignment → alignment, none →
+// neither). Derived from `state.deaths`, so it carries cause/day directly.
+export interface GraveyardEntry {
+  playerId: PlayerId;
+  day: number;
+  cause: "night" | "vote";
+  roleId?: RoleId;
+  alignment?: string;
+}
+
+// Spec 12 Feature 1: the host-only narrator board's per-phase reconstructed
+// picture. `NightBoard`/`DayBoard` are built client-side from the host
+// projection (a trusted god view) — see `narratorBoardHistory` in project.ts,
+// which replays `actionLocked`/`voteLocked` log events. These types shape that
+// derived data; they are NOT projection fields (no new projection variant).
+export interface BoardVoteRow {
+  voterId: PlayerId;
+  target: VoteTarget | null;
+}
+export interface BoardActionRow {
+  actorId: PlayerId;
+  actionType: NightActionType;
+  targetId: PlayerId | null;
+}
 
 export interface ClientGamePlayer {
   id: PlayerId;
@@ -109,4 +152,13 @@ export interface ClientGameView {
   runoffCandidates?: PlayerId[];
   log: GameEvent[];
   winners: string[] | null;
+  /** Spec 12 Feature 3: alive-role counts, AGGREGATE-ONLY, present for EVERY
+   * viewer at all phases (Tanner's transparency choice — full counts always).
+   * Never a per-living-player list. */
+  rolesRemaining: RoleCount[];
+  /** Spec 12 Feature 3: the graveyard — one entry per dead player, role per
+   * `revealOnDeath`. Present for every viewer. */
+  graveyard: GraveyardEntry[];
+  /** Spec 12 Feature 3: alive / total headcount (aggregate). */
+  headcount: { alive: number; total: number };
 }

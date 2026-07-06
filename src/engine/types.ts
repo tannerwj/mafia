@@ -101,6 +101,12 @@ export type Command =
   // Spec 11: acknowledge the current dawn Morning Report. `gen` is
   // phaseGen-guarded (like forceAdvance) — a stale ack no-ops.
   | { type: "acknowledge"; playerId: PlayerId; gen: number; now?: number }
+  // Spec 12: the narrator-gated reveal. Host-only, legal ONLY in
+  // sunrise/sunset; phaseGen-guarded like forceAdvance (rejects loudly with
+  // `stale_advance` on a mismatch — a single trusted actor whose UI disables
+  // the button, NOT the silent no-op `acknowledge` uses). Resolves the deferred
+  // night/vote and advances to dawn/dusk.
+  | { type: "reveal"; byHost?: boolean; gen: number; now?: number }
   | { type: "forceAdvance"; byHost?: boolean; gen: number; now?: number }
   | { type: "timerExpired"; at: number; now?: number }
   | { type: "markAbsent"; byHost?: boolean; playerId: PlayerId; now?: number }

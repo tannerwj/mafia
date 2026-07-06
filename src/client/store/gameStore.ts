@@ -38,6 +38,7 @@ const REJECTION_COPY: Record<string, string> = {
   game_not_started: "The game hasn't started yet.",
   no_pick_to_lock: "Choose a target before locking in.",
   not_lockable: "You can't lock in right now.",
+  reveal_not_active: "There's no scene to reveal right now.",
 };
 
 function rejectionMessage(code: string): string {
@@ -209,6 +210,10 @@ export function markPresent(playerId: string): void {
 
 export function forceAdvance(gen: number): void {
   useGameStore.getState().send({ type: "force_advance", gen });
+}
+
+export function reveal(gen: number): void {
+  useGameStore.getState().send({ type: "reveal", gen });
 }
 
 export function kickPlayer(playerId: string): void {

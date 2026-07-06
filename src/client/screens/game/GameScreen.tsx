@@ -13,6 +13,8 @@ import DeadGodView from "./DeadGodView";
 import GameEnd from "./GameEnd";
 import Interstitial from "./Interstitial";
 import NightActionDrawer from "./NightActionDrawer";
+import SceneHolding from "./SceneHolding";
+import GameStatus from "./GameStatus";
 import RoleReveal from "../../components/RoleReveal";
 import MyRoleButton from "../../components/MyRoleButton";
 import HelpButton from "../../components/HelpButton";
@@ -26,8 +28,22 @@ import HelpButton from "../../components/HelpButton";
 // sat visibly dim for twice as long as the spec's pin, not "stuck").
 const FADE_MS = 150;
 
+// Spec 12 phase-discriminant audit: every Phase gets an explicit tint arm — no
+// fallthrough. sunrise reads as the tail of night (cool), sunset as the tail of
+// day (warm), matching the neighbouring resolved beat's mood.
 function tintFor(phase: ClientGameView["phase"]): "night" | "day" {
-  return phase === "day" || phase === "dusk" || phase === "runoff" ? "day" : "night";
+  switch (phase) {
+    case "day":
+    case "runoff":
+    case "sunset":
+    case "dusk":
+      return "day";
+    case "night":
+    case "sunrise":
+    case "dawn":
+    case "ended":
+      return "night";
+  }
 }
 
 /** Cool/pure-ink at night, warm ink-2+brass by day — the phase-tint
@@ -106,10 +122,24 @@ export default function GameScreen({
       )}
       <HelpButton className="fixed bottom-3 right-3 z-60 flex h-11 w-11 items-center justify-center rounded-sm border-2 border-frame bg-ink-2 text-lg text-paper shadow-lg safe-bottom safe-x" />
 
+      {/* Spec 12 Feature 3: the always-available all-player status panel. Shown
+          for every in-game player screen (living or dead) except the end
+          screen, which has its own full role reveal. */}
+      {game.phase !== "ended" && (
+        <GameStatus game={game} playerNames={new Map(players.map((p) => [p.id, p.name]))} />
+      )}
+
       {/* Content stacks above the decorative z-0 ambiance wash. */}
       <div className="relative z-10 flex flex-1 flex-col">
         {game.phase === "ended" ? (
           <GameEnd game={game} players={players} isHost={isHost} />
+        ) : game.phase === "sunrise" || game.phase === "sunset" ? (
+          // Spec 12: the deferred-resolution holding screen. Placed BEFORE the
+          // isDead branch: during sunrise/sunset the night/vote is UNRESOLVED,
+          // so a would-be-dead player is still projected alive and must see the
+          // neutral holding screen, never a god view that would leak the pending
+          // outcome. Everyone (would-be living or dead) waits here.
+          <SceneHolding game={game} />
         ) : isDead ? (
           <DeadGodView game={game} players={players} />
         ) : game.phase === "dawn" || game.phase === "dusk" ? (

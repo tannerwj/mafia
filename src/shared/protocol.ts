@@ -158,6 +158,16 @@ export interface ForceAdvanceMessage {
   gen: number;
 }
 
+/** Spec 12. Host-only narrator reveal. Legal ONLY while the engine phase is
+ * `sunrise`/`sunset` (else rejected `reveal_not_active`); echoes `phaseGen`
+ * like `force_advance` and rejects loudly `stale_advance` on a mismatch (the
+ * host UI disables the button — not the silent no-op `acknowledge` uses).
+ * Resolves the deferred night/vote and advances to dawn/dusk. */
+export interface RevealMessage {
+  type: "reveal";
+  gen: number;
+}
+
 export interface MarkAbsentMessage {
   type: "mark_absent";
   playerId: string;
@@ -189,6 +199,7 @@ export type ClientMessage =
   | LockActionMessage
   | UnlockActionMessage
   | ForceAdvanceMessage
+  | RevealMessage
   | MarkAbsentMessage
   | MarkPresentMessage
   | SetRulesetMessage

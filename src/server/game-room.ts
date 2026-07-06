@@ -333,6 +333,14 @@ export class GameRoom extends DurableObject<Env> {
           now: Date.now(),
         });
         return;
+      case "reveal":
+        await this.handleHostGameCommand(ws, attachment, {
+          type: "reveal",
+          byHost: true,
+          gen: parsed.gen,
+          now: Date.now(),
+        });
+        return;
       case "mark_absent":
         await this.handleHostGameCommand(ws, attachment, {
           type: "markAbsent",

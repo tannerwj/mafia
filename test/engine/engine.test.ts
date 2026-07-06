@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { applyCommand, HOUSE_RULES, projectFor, startGame, validateRuleset, type GameState, type LobbyPlayer, type Ruleset } from "../../src/engine";
+import { applyCommand, HOUSE_RULES, narratorBoardHistory, projectFor, startGame, validateRuleset, type GameState, type LobbyPlayer, type Ruleset } from "../../src/engine";
 import { FIXTURE_ROLES } from "./fixtures/extra-roles";
 
 const NOW = 1_000_000;
@@ -1104,5 +1104,258 @@ describe("engine core", () => {
     expect(s.phase).toBe("ended");
     expect(s.winners).toEqual(["village"]);
     expect(living(s).map((p) => p.id).sort()).toEqual(villagers.map((p) => p.id).sort());
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Spec 12 — narrator board, sunrise/sunset (deferred resolution), game status.
+// -----------------------------------------------------------------------------
+
+describe("Spec 12: sunrise/sunset deferred resolution", () => {
+  // Drive a night to full readiness (mafia locked, everyone else settled) so
+  // the NEXT engine step is the night→(sunrise|dawn) transition.
+  const readyNight = (state: GameState, killTarget: string) => {
+    let s = state;
+    const mafia = s.players.filter((p) => p.roleId === "mafia");
+    for (const m of mafia) {
+      s = applyCommand(s, { type: "submitAction", playerId: m.id, targetId: killTarget }).state;
+      s = applyCommand(s, { type: "lockAction", playerId: m.id }).state;
+    }
+    return settleDecoys(s, mafia.map((m) => m.id));
+  };
+
+  test("scenePhases OFF: phase sequence is byte-identical to Spec 11 (regression backstop C3)", () => {
+    // Same seed/ruleset, run once with scenePhases explicitly false (the
+    // default). Asserts the resolved sequence night→dawn→day→dusk→night — NO
+    // sunrise/sunset ever appears — and that a full snapshot is structurally
+    // what Spec 11 produced (spot: phase values + no scene phase in the log).
+    const r = rules({ mafia: 1, villager: 4 }, { firstNightKill: false, scenePhases: false });
+    let s = start(5, r, 5);
+    const seq: string[] = [s.phase];
+    s = settleDecoys(s);
+    seq.push(s.phase); // dawn (night resolved directly)
+    for (const p of living(s)) s = applyCommand(s, { type: "acknowledge", playerId: p.id, gen: s.phaseGen }).state;
+    seq.push(s.phase); // day
+    const victim = living(s).find((p) => p.roleId === "villager")!.id;
+    s = voteOut(s, victim);
+    seq.push(s.phase); // dusk
+    s = force(s);
+    seq.push(s.phase); // night (day 2)
+    expect(seq).toEqual(["night", "dawn", "day", "dusk", "night"]);
+    expect(s.log.some((e) => e.type === "phaseChanged" && (e.phase === "sunrise" || e.phase === "sunset"))).toBe(false);
+  });
+
+  test("scenePhases ON: night readiness defers to sunrise WITHOUT resolving; reveal resolves to dawn", () => {
+    const r = rules({ mafia: 1, villager: 4 }, { scenePhases: true });
+    let s = start(5, r, 5);
+    const mafia = byRole(s, "mafia");
+    const victim = living(s).find((p) => p.roleId === "villager")!;
+    s = readyNight(s, victim.id);
+    // The night is READY but scenePhases defers: we are in sunrise, UNRESOLVED.
+    expect(s.phase).toBe("sunrise");
+    // LEAK PROOF: nothing resolved. Victim still alive, NO playerDied/
+    // attackAttempted in the log, no death recorded.
+    expect(s.players.find((p) => p.id === victim.id)?.alive).toBe(true);
+    expect(s.log.some((e) => e.type === "playerDied")).toBe(false);
+    expect(s.log.some((e) => e.type === "attackAttempted")).toBe(false);
+    expect(s.deaths).toHaveLength(0);
+    void mafia;
+
+    // Host reveals -> NOW resolveNight + win run -> dawn, and the kill lands.
+    const revealed = applyCommand(s, { type: "reveal", byHost: true, gen: s.phaseGen });
+    s = revealed.state;
+    expect(s.phase).toBe("dawn");
+    expect(s.players.find((p) => p.id === victim.id)?.alive).toBe(false);
+    expect(s.log).toContainEqual(expect.objectContaining({ type: "attackAttempted", targetId: victim.id, outcome: "landed" }));
+  });
+
+  test("scenePhases ON: day-vote readiness defers to sunset; reveal resolves to dusk", () => {
+    const r = rules({ mafia: 1, villager: 4 }, { firstNightKill: false, scenePhases: true });
+    let s = start(5, r, 5);
+    // Reach day: night defers to sunrise, reveal -> dawn, ack -> day.
+    s = settleDecoys(s);
+    expect(s.phase).toBe("sunrise");
+    s = applyCommand(s, { type: "reveal", byHost: true, gen: s.phaseGen }).state;
+    expect(s.phase).toBe("dawn");
+    for (const p of living(s)) s = applyCommand(s, { type: "acknowledge", playerId: p.id, gen: s.phaseGen }).state;
+    expect(s.phase).toBe("day");
+
+    // Everyone confirms a vote on a villager -> readiness defers to SUNSET
+    // (vote UNRESOLVED: nobody eliminated yet).
+    const victim = living(s).find((p) => p.roleId === "villager")!;
+    s = voteOut(s, victim.id);
+    expect(s.phase).toBe("sunset");
+    expect(s.players.find((p) => p.id === victim.id)?.alive).toBe(true);
+    expect(s.log.some((e) => e.type === "voteResolved")).toBe(false);
+
+    // Reveal -> resolveVote + win -> dusk, elimination lands.
+    s = applyCommand(s, { type: "reveal", byHost: true, gen: s.phaseGen }).state;
+    expect(s.phase).toBe("dusk");
+    expect(s.players.find((p) => p.id === victim.id)?.alive).toBe(false);
+    expect(s.deaths.at(-1)?.cause).toBe("vote");
+  });
+
+  test("scenePhases ON: the sunrise HOLDING projection leaks no outcome to a player", () => {
+    const r = rules({ mafia: 1, villager: 4 }, { scenePhases: true });
+    let s = start(5, r, 5);
+    const victim = living(s).find((p) => p.roleId === "villager")!;
+    const observer = living(s).find((p) => p.roleId === "villager" && p.id !== victim.id)!;
+    s = readyNight(s, victim.id);
+    expect(s.phase).toBe("sunrise");
+
+    const view = projectFor(s, { kind: "player", id: observer.id });
+    // Victim still shows alive; no death event; no attack event; no action
+    // detail (actionSubmitted stripped for non-god); no watch targets.
+    expect(view.players.find((p) => p.id === victim.id)?.alive).toBe(true);
+    expect(view.log.some((e) => e.type === "playerDied")).toBe(false);
+    expect(view.log.some((e) => e.type === "attackAttempted")).toBe(false);
+    expect(view.log.some((e) => e.type === "actionSubmitted")).toBe(false);
+    expect(JSON.stringify(view.log)).not.toContain("watch");
+    // The observer's own view carries no other player's role either.
+    expect(view.players.some((p) => p.id !== observer.id && p.roleId)).toBe(false);
+  });
+
+  test("reveal command contract: host-only, reveal_not_active outside sunrise/sunset, stale_advance on gen mismatch; force-advance also works", () => {
+    const r = rules({ mafia: 1, villager: 4 }, { scenePhases: true });
+    let s = start(5, r, 5);
+
+    // Not in a scene phase (night) -> reveal_not_active, even for the host.
+    expect(applyCommand(s, { type: "reveal", byHost: true, gen: s.phaseGen }).rejection?.code).toBe("reveal_not_active");
+    // Non-host reveal -> not_host.
+    expect(applyCommand(s, { type: "reveal", byHost: false, gen: s.phaseGen }).rejection?.code).toBe("not_host");
+
+    const victim = living(s).find((p) => p.roleId === "villager")!;
+    s = readyNight(s, victim.id);
+    expect(s.phase).toBe("sunrise");
+
+    // Stale gen in a scene phase -> stale_advance (loud, not a silent no-op).
+    expect(applyCommand(s, { type: "reveal", byHost: true, gen: s.phaseGen + 1 }).rejection?.code).toBe("stale_advance");
+
+    // Host force-advance out of sunrise also resolves (the escape hatch).
+    const forced = applyCommand(s, { type: "forceAdvance", byHost: true, gen: s.phaseGen });
+    expect(forced.state.phase).toBe("dawn");
+    expect(forced.state.players.find((p) => p.id === victim.id)?.alive).toBe(false);
+  });
+
+  test("scenePhases ON: host force-advance from a ready night resolves directly to dawn (bypasses sunrise)", () => {
+    const r = rules({ mafia: 1, villager: 4 }, { scenePhases: true });
+    let s = start(5, r, 5);
+    const victim = living(s).find((p) => p.roleId === "villager")!;
+    // Force-advance BEFORE readiness — the host's escape hatch resolves the
+    // night directly (locked-plurality), never parking in sunrise.
+    const mafia = byRole(s, "mafia");
+    s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: victim.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia.id }).state;
+    s = force(s);
+    expect(s.phase).toBe("dawn");
+  });
+});
+
+describe("Spec 12: game-status aggregates + narrator board history", () => {
+  test("projection: rolesRemaining is aggregate-only for every viewer; no per-living-player role list", () => {
+    let s = start(5, rules({ mafia: 1, detective: 1, angel: 1, villager: 2 }), 9);
+    for (const viewer of [{ kind: "player" as const, id: byRole(s, "villager").id }, { kind: "host" as const }, { kind: "public" as const }]) {
+      const view = projectFor(s, viewer);
+      // Present and a sum-to-living aggregate.
+      expect(view.rolesRemaining).toEqual(expect.any(Array));
+      expect(view.rolesRemaining.reduce((n, r) => n + r.count, 0)).toBe(living(s).length);
+      // Each entry is {roleId, count} — never carries a playerId.
+      for (const rc of view.rolesRemaining) {
+        expect(rc).toHaveProperty("roleId");
+        expect(rc).toHaveProperty("count");
+        expect(rc).not.toHaveProperty("playerId");
+      }
+      expect(view.headcount).toEqual({ alive: living(s).length, total: s.players.length });
+    }
+    // Full transparency: even a hidden/no-reveal ruleset exposes full counts.
+    const hidden = start(5, rules({ mafia: 1, detective: 1, angel: 1, villager: 2 }, { revealOnDeath: "none", votingVisibility: "hidden" }), 9);
+    const hv = projectFor(hidden, { kind: "player", id: byRole(hidden, "villager").id });
+    expect(hv.rolesRemaining.find((r) => r.roleId === "mafia")?.count).toBe(1);
+  });
+
+  test("projection: graveyard follows revealOnDeath and never lists a living player", () => {
+    // Kill a villager at night under revealOnDeath: full.
+    let s = start(5, rules({ mafia: 1, detective: 1, angel: 1, villager: 2 }, { revealOnDeath: "full" }), 9);
+    const mafia = byRole(s, "mafia");
+    const victim = living(s).find((p) => p.roleId === "villager")!;
+    s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: victim.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia.id }).state;
+    s = settleDecoys(s, [mafia.id]);
+    s = force(s); // dawn -> (ack path skipped via force) ... just need the death recorded
+    const view = projectFor(s, { kind: "player", id: mafia.id });
+    const grave = view.graveyard.find((g) => g.playerId === victim.id);
+    expect(grave).toBeDefined();
+    expect(grave?.roleId).toBe("villager"); // full reveal
+    // No living player appears in the graveyard.
+    const livingIds = new Set(living(s).map((p) => p.id));
+    expect(view.graveyard.some((g) => livingIds.has(g.playerId))).toBe(false);
+
+    // alignment-only reveal hides the exact role.
+    let a = start(5, rules({ mafia: 1, detective: 1, angel: 1, villager: 2 }, { revealOnDeath: "alignment" }), 9);
+    const am = byRole(a, "mafia");
+    const av = living(a).find((p) => p.roleId === "villager")!;
+    a = applyCommand(a, { type: "submitAction", playerId: am.id, targetId: av.id }).state;
+    a = applyCommand(a, { type: "lockAction", playerId: am.id }).state;
+    a = settleDecoys(a, [am.id]);
+    a = force(a);
+    const ag = projectFor(a, { kind: "player", id: am.id }).graveyard.find((g) => g.playerId === av.id);
+    expect(ag?.roleId).toBeUndefined();
+    expect(ag?.alignment).toBe("town");
+  });
+
+  test("narratorBoardHistory: reconstructs locked picks per day from the host log (locked-only, last-wins)", () => {
+    let s = start(5, rules({ mafia: 1, detective: 1, angel: 1, villager: 2 }), 9);
+    const mafia = byRole(s, "mafia");
+    const detective = byRole(s, "detective");
+    const victim = living(s).find((p) => p.roleId === "villager")!;
+
+    // Detective submits then RE-submits a different target (clears lock), then
+    // locks the second — history must show only the locked (second) target.
+    s = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: victim.id }).state;
+    s = applyCommand(s, { type: "submitAction", playerId: detective.id, targetId: mafia.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: detective.id }).state;
+    // Mafia submits + locks.
+    s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: victim.id }).state;
+    s = applyCommand(s, { type: "lockAction", playerId: mafia.id }).state;
+
+    const hostView = projectFor(s, { kind: "host" });
+    const history = narratorBoardHistory(hostView.log);
+    const day1 = history.find((h) => h.day === 1)!;
+    // Detective's locked row shows the SECOND (locked) target, not the first.
+    const detRow = day1.nightActions.find((a) => a.actorId === detective.id);
+    expect(detRow?.targetId).toBe(mafia.id);
+    expect(detRow?.actionType).toBe("investigate");
+    // A non-locked actor has no row. (Both villagers/angel haven't locked.)
+    expect(day1.nightActions.some((a) => a.targetId === null && a.actorId !== detective.id && a.actorId !== mafia.id)).toBe(false);
+
+    // A non-host projection's log cannot reconstruct night TARGETS: the helper
+    // reads `actionSubmitted` targets, which `resolvedLog` strips from non-god
+    // logs. `actionLocked` events (who locked, NO target) do still reach
+    // players, so rows may exist — but every reconstructed target is null, so
+    // no target leaks through this path.
+    const villagerLog = projectFor(s, { kind: "player", id: victim.id }).log;
+    // Confirm the player log truly carries no target-bearing action event.
+    expect(villagerLog.some((e) => e.type === "actionSubmitted")).toBe(false);
+    const villagerHistory = narratorBoardHistory(villagerLog);
+    for (const day of villagerHistory) {
+      for (const row of day.nightActions) expect(row.targetId).toBeNull();
+    }
+  });
+
+  test("narratorBoardHistory: day votes reconstruct locked-only, unlock removes the row", () => {
+    let s = toDay(start(5, rules({ mafia: 1, villager: 4 }, { firstNightKill: false }), 5));
+    const ids = living(s).map((p) => p.id);
+    // Two players cast+confirm, a third casts+confirms then UNCONFIRMS.
+    s = castConfirm(s, ids[0]!, ids[1]!);
+    s = castConfirm(s, ids[2]!, ids[1]!);
+    s = applyCommand(s, { type: "castVote", playerId: ids[3]!, target: ids[1]! }).state;
+    s = applyCommand(s, { type: "confirmVote", playerId: ids[3]! }).state;
+    s = applyCommand(s, { type: "unconfirmVote", playerId: ids[3]! }).state;
+
+    const history = narratorBoardHistory(projectFor(s, { kind: "host" }).log);
+    const today = history.find((h) => h.day === s.day)!;
+    const lockedVoters = today.dayVotes.map((v) => v.voterId).sort();
+    expect(lockedVoters).toEqual([ids[0]!, ids[2]!].sort()); // ids[3] unlocked -> no row
+    expect(today.dayVotes.find((v) => v.voterId === ids[0]!)?.target).toBe(ids[1]!);
   });
 });

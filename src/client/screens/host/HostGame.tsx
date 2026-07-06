@@ -10,12 +10,13 @@ import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import HelpButton from "../../components/HelpButton";
-import { forceAdvance, markAbsent, markPresent } from "../../store/gameStore";
+import { forceAdvance, markAbsent, markPresent, reveal } from "../../store/gameStore";
 import { forceAdvanceCopy, hostSeatRows, phaseLabel, phaseSummary } from "../../store/hostView";
 import DeadlineCountdown from "./DeadlineCountdown";
 import { PlayerTable } from "./PlayerTable";
 import PrivacyChip from "./PrivacyChip";
 import HostLog from "./HostLog";
+import NarratorBoard from "./NarratorBoard";
 
 function PhaseHeader({ game, rows }: { game: ClientGameView; rows: ReturnType<typeof hostSeatRows> }) {
   return (
@@ -75,10 +76,42 @@ function ForceAdvanceControl({ game }: { game: ClientGameView }) {
   );
 }
 
+// Spec 12 Feature 2: the narrator Reveal. Shown ONLY in sunrise/sunset (the
+// engine rejects it anywhere else, `reveal_not_active`). The host narrates the
+// scene aloud from the board, then taps this to resolve the deferred night/vote
+// and continue to dawn/dusk. Captures phaseGen at click time; a stale gen is
+// rejected `stale_advance` (the store toasts "already moved on"). No confirm
+// dialog — this is the intended, expected beat, not a dangerous override.
+function RevealControl({ game }: { game: ClientGameView }) {
+  const isSunrise = game.phase === "sunrise";
+  return (
+    <div className="flex flex-col gap-2 rounded-sm border-2 border-brass/60 bg-ink-3 p-3">
+      <p className="text-[0.65rem] uppercase tracking-[0.2em] text-brass-hi">
+        {isSunrise ? "Set the morning scene" : "Set the evening scene"}
+      </p>
+      <p className="text-xs text-smoke">
+        // Narrate what happens from the board below, then reveal it to the
+        table. Players see a neutral holding screen until you do.
+      </p>
+      <Button
+        type="button"
+        data-testid="reveal-button"
+        variant="brass"
+        onClick={() => reveal(game.phaseGen)}
+        className="w-full"
+      >
+        Reveal the scene
+      </Button>
+    </div>
+  );
+}
+
 function Controls({ game }: { game: ClientGameView }) {
+  const inScene = game.phase === "sunrise" || game.phase === "sunset";
   return (
     <div className="flex flex-col gap-3">
       <p className="text-[0.65rem] uppercase tracking-[0.2em] text-smoke">Investigator controls</p>
+      {inScene && <RevealControl game={game} />}
       <ForceAdvanceControl game={game} />
       <p className="text-xs text-smoke">
         // Mark subjects absent/present from their row — absent subjects leave
@@ -128,6 +161,7 @@ export default function HostGame({ room, game }: { room: ClientRoomState; game: 
           <div className="hidden md:flex md:flex-col md:gap-4">
             <Controls game={game} />
           </div>
+          <NarratorBoard game={game} rows={rows} playerNames={playerNames} />
           <HostLog game={game} playerNames={playerNames} />
         </div>
       </div>

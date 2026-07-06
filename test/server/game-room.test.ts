@@ -169,6 +169,7 @@ const FIVE_PLAYER_HOUSE_RULES: Ruleset = {
   revealOnDeath: "full",
   parityRule: "immediate",
   votingVisibility: "hidden",
+  scenePhases: false,
   timers: {},
   dawnDuskBeatMs: 3000,
 };
@@ -1682,5 +1683,150 @@ describe("Spec 11: set_ruleset / pendingRuleset, confirm_vote, acknowledge", () 
     game.detective.ws.close();
     game.villager2.ws.close();
     game.mafia.ws.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spec 12 — reveal command, scenePhases, game-status aggregates.
+// ---------------------------------------------------------------------------
+
+function closeAll(game: FivePlayerGame): void {
+  game.hostWs.close();
+  game.angel.ws.close();
+  game.villager1.ws.close();
+  game.detective.ws.close();
+  game.villager2.ws.close();
+  game.mafia.ws.close();
+}
+
+async function startScenePhasesGame(game: FivePlayerGame) {
+  sendGame(game.hostWs, {
+    type: "start_game",
+    ruleset: { ...FIVE_PLAYER_HOUSE_RULES, scenePhases: true },
+    seed: SCRIPTED_SEED,
+  });
+  return drainSnapshots(game);
+}
+
+describe("Spec 12: reveal command contract", () => {
+  test("reveal outside a scene phase is rejected reveal_not_active; non-host reveal not_host", async () => {
+    const game = await setUpFivePlayerRoom();
+    const afterStart = await startScriptedGame(game); // scenePhases OFF
+
+    // Host reveal during night (no scene phase) -> reveal_not_active.
+    sendGame(game.hostWs, { type: "reveal", gen: afterStart.detective.game!.phaseGen });
+    const rej1 = (await nextMessageOfType(game.hostWs, "rejection")) as RejectionMessage;
+    expect(rej1.code).toBe("reveal_not_active");
+
+    // A player socket cannot reveal at all -> not_host.
+    sendGame(game.angel.ws, { type: "reveal", gen: afterStart.angel.game!.phaseGen });
+    const rej2 = (await nextMessageOfType(game.angel.ws, "rejection")) as RejectionMessage;
+    expect(rej2.code).toBe("not_host");
+
+    closeAll(game);
+  });
+
+  test("scenePhases ON: ready night parks in sunrise (unresolved), host reveal advances to dawn", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScenePhasesGame(game);
+
+    // Night 1: mafia kills Dave, everyone settles. With scenePhases on, this
+    // parks in sunrise WITHOUT resolving.
+    sendGame(game.mafia.ws, { type: "submit_action", action: { targetId: game.villager2.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.angel.ws, { type: "submit_action", action: { targetId: game.villager1.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.detective.ws, { type: "submit_action", action: { targetId: game.mafia.playerId } });
+    await drainSnapshots(game);
+    sendGame(game.mafia.ws, { type: "lock_action" });
+    await drainSnapshots(game);
+    const atSunrise = await settleNightRemainder(game);
+
+    expect(atSunrise.detective.phase).toBe("sunrise");
+    // LEAK PROOF: Dave still alive, no death in any player's log/players.
+    expect(atSunrise.villager1.game?.players.find((p) => p.id === game.villager2.playerId)?.alive).toBe(true);
+    expect(atSunrise.villager1.game?.log.some((e) => e.type === "playerDied")).toBe(false);
+    expect(atSunrise.villager1.game?.log.some((e) => e.type === "attackAttempted")).toBe(false);
+
+    // Stale-gen reveal -> stale_advance (loud, host UI disables the button).
+    sendGame(game.hostWs, { type: "reveal", gen: atSunrise.detective.game!.phaseGen + 5 });
+    const stale = (await nextMessageOfType(game.hostWs, "rejection")) as RejectionMessage;
+    expect(stale.code).toBe("stale_advance");
+
+    // Host reveals -> NOW the night resolves and advances to dawn.
+    sendGame(game.hostWs, { type: "reveal", gen: atSunrise.detective.game!.phaseGen });
+    const afterReveal = await drainSnapshots(game);
+    expect(afterReveal.detective.phase).toBe("dawn");
+    expect(afterReveal.villager1.game?.players.find((p) => p.id === game.villager2.playerId)?.alive).toBe(false);
+
+    closeAll(game);
+  });
+
+  test("scenePhases ON: ready day vote parks in sunset, reveal advances to dusk/ended", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScenePhasesGame(game);
+
+    // Force through night 1 (host escape hatch bypasses sunrise -> dawn),
+    // ack -> day.
+    sendGame(game.hostWs, { type: "force_advance", gen: 0 });
+    const afterN1 = await drainSnapshots(game);
+    expect(afterN1.detective.phase).toBe("dawn");
+    const living = [game.angel, game.villager1, game.detective, game.villager2, game.mafia] as const;
+    const afterAck = await acknowledgeDawn(game, afterN1.detective.game!.phaseGen, living);
+    expect(afterAck.detective.phase).toBe("day");
+
+    // Everyone confirms a vote on the mafia -> parks in sunset (UNRESOLVED).
+    const atSunset = await voteConfirmAll(game, game.mafia.playerId, living);
+    expect(atSunset.detective.phase).toBe("sunset");
+    expect(atSunset.villager1.game?.players.find((p) => p.id === game.mafia.playerId)?.alive).toBe(true);
+
+    // Reveal -> resolveVote runs; the mafia elimination ends the game.
+    sendGame(game.hostWs, { type: "reveal", gen: atSunset.detective.game!.phaseGen });
+    const afterReveal = await drainSnapshots(game);
+    expect(afterReveal.detective.phase).toBe("ended");
+    expect(afterReveal.detective.game?.winners).toEqual(["village"]);
+
+    closeAll(game);
+  });
+});
+
+describe("Spec 12: game-status aggregates + scenePhases set_ruleset", () => {
+  test("every viewer's projection carries rolesRemaining/graveyard/headcount aggregates; no per-living-player role list", async () => {
+    const game = await setUpFivePlayerRoom();
+    const afterStart = await startScriptedGame(game);
+
+    for (const key of ["angel", "villager1", "detective", "villager2", "mafia"] as const) {
+      const view = afterStart[key].game!;
+      expect(view.rolesRemaining).toEqual(expect.any(Array));
+      expect(view.rolesRemaining.reduce((n, r) => n + r.count, 0)).toBe(5);
+      for (const rc of view.rolesRemaining) expect(rc).not.toHaveProperty("playerId");
+      expect(view.headcount).toEqual({ alive: 5, total: 5 });
+      expect(view.graveyard).toEqual([]);
+    }
+    // A living villager's frame still reveals no OTHER living player's role.
+    const villagerFrame = afterStart.villager1.game!;
+    for (const p of villagerFrame.players) {
+      if (p.id !== game.villager1.playerId && p.alive) expect(p.roleId).toBeUndefined();
+    }
+
+    closeAll(game);
+  });
+
+  test("set_ruleset carries scenePhases through to pendingRuleset for players", async () => {
+    const game = await setUpFivePlayerRoom();
+    sendGame(game.hostWs, {
+      type: "set_ruleset",
+      ruleset: { ...FIVE_PLAYER_HOUSE_RULES, scenePhases: true },
+    });
+    const snap = (await nextMessageOfType(game.villager1.ws, "snapshot")).state;
+    expect(snap.pendingRuleset?.scenePhases).toBe(true);
+    await Promise.all([
+      nextMessageOfType(game.angel.ws, "snapshot"),
+      nextMessageOfType(game.detective.ws, "snapshot"),
+      nextMessageOfType(game.villager2.ws, "snapshot"),
+      nextMessageOfType(game.hostWs, "snapshot"),
+    ]);
+
+    closeAll(game);
   });
 });

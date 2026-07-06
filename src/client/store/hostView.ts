@@ -108,6 +108,8 @@ export function phaseSummary(game: ClientGameView, rows: HostSeatRow[]): string 
       ? `${votedCount} of ${livingActive.length} have voted — waiting on ${pending}.`
       : `${votedCount} of ${livingActive.length} have voted.`;
   }
+  if (game.phase === "sunrise") return "Night is locked — narrate the scene, then tap Reveal.";
+  if (game.phase === "sunset") return "The vote is locked — narrate the scene, then tap Reveal.";
   if (game.phase === "dawn") return "Resolving the night — dawn beat in progress.";
   if (game.phase === "dusk") return "Resolving the vote — dusk beat in progress.";
   return "";
@@ -117,12 +119,16 @@ export function phaseLabel(phase: Phase): string {
   switch (phase) {
     case "night":
       return "Night";
+    case "sunrise":
+      return "Sunrise";
     case "dawn":
       return "Dawn";
     case "day":
       return "Day";
     case "runoff":
       return "Runoff";
+    case "sunset":
+      return "Sunset";
     case "dusk":
       return "Dusk";
     case "ended":
@@ -139,6 +145,10 @@ export function forceAdvanceCopy(phase: Phase): string {
     case "day":
     case "runoff":
       return "Players who haven't voted will abstain. The vote resolves with whoever has voted so far.";
+    case "sunrise":
+      return "This skips the narrator's reveal — the night resolves immediately and play continues to dawn.";
+    case "sunset":
+      return "This skips the narrator's reveal — the vote resolves immediately and play continues to dusk.";
     case "dawn":
     case "dusk":
       return "This skips the reveal beat — nothing is pending to resolve.";

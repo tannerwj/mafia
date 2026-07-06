@@ -1,4 +1,4 @@
-import type { ClientGameView, Viewer } from "../shared/game-view";
+import type { ClientGameView, GraveyardEntry, RoleCount, Viewer } from "../shared/game-view";
 import { activeNightActionFor, canSubmitMafiaVote, currentRoles, getRole, hasNightInput, mafiaKillers } from "./roles";
 import { resolveConsensus } from "./consensus";
 import type { GameEvent, GameState } from "./types";
@@ -63,6 +63,42 @@ function actedThisNight(state: GameState, playerId: string): boolean | undefined
   return undefined;
 }
 
+// Spec 12 Feature 3: alive-role counts as {roleId, count} AGGREGATES ONLY.
+// Grouped and counted — NEVER a per-living-player array (even name-stripped: a
+// positional list would map join-order position → identity). Exposed to EVERY
+// viewer at all phases (Tanner's transparency choice — full counts always,
+// regardless of `revealOnDeath`). Sorted by roleId for a stable order that
+// carries no seat/identity signal. Note the deliberately-accepted tradeoff
+// (spec §Feature 3): under a hidden/no-reveal setup this reveals the exact
+// alive-role breakdown, and a death's timing can retroactively correlate to a
+// count change — both accepted, same tradeoff as showing counts at all.
+function rolesRemaining(state: GameState): RoleCount[] {
+  const counts = new Map<string, number>();
+  for (const p of state.players) {
+    if (!p.alive) continue;
+    counts.set(p.roleId, (counts.get(p.roleId) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map(([roleId, count]) => ({ roleId, count }));
+}
+
+// Spec 12 Feature 3: the graveyard — one entry per dead player, role shown per
+// `revealOnDeath` (reusing the same disclosure rule as `revealForPublic`).
+// Ordered by death (deaths array order). Exposed to every viewer.
+function graveyard(state: GameState): GraveyardEntry[] {
+  const full = state.phase === "ended" || state.ruleset.revealOnDeath === "full";
+  const alignmentOnly = state.ruleset.revealOnDeath === "alignment";
+  return state.deaths.map((d) => {
+    const entry: GraveyardEntry = { playerId: d.playerId, day: d.day, cause: d.cause };
+    if (full) {
+      entry.roleId = d.roleId;
+      entry.alignment = d.alignment;
+    } else if (alignmentOnly) {
+      entry.alignment = d.alignment;
+    }
+    return entry;
+  });
+}
+
 export function projectFor(state: GameState, viewer: Viewer): ClientGameView {
   const viewerPlayer = viewer.kind === "player" ? state.players.find((p) => p.id === viewer.id) : undefined;
   const god = viewer.kind === "host" || (!!viewerPlayer && !viewerPlayer.alive) || state.phase === "ended";
@@ -90,6 +126,10 @@ export function projectFor(state: GameState, viewer: Viewer): ClientGameView {
     }),
     log: resolvedLog(state, hostLive),
     winners: state.winners,
+    // Spec 12 Feature 3: aggregate-only game status for every viewer.
+    rolesRemaining: rolesRemaining(state),
+    graveyard: graveyard(state),
+    headcount: { alive: state.players.filter((p) => p.alive).length, total: state.players.length },
   };
   if (state.runoffCandidates) view.runoffCandidates = state.runoffCandidates;
   // Spec 11 no-pending-count leak ban: a plain (hidden-voting, non-god) player
@@ -166,4 +206,83 @@ export function projectFor(state: GameState, viewer: Viewer): ClientGameView {
     view.you = you;
   }
   return view;
+}
+
+// ---------------------------------------------------------------------------
+// Spec 12 Feature 1 — narrator board history (HOST-ONLY derived helper).
+//
+// `state.votes`/`mafiaVotes`/`nightActions` are CLEARED every phase, so the
+// per-day/per-night board history cannot read them — it is RECONSTRUCTED by
+// replaying the host projection's log. We key off the `*Locked` events
+// (`actionLocked`/`voteLocked`), so "locked only" falls out for free: a row
+// exists iff that actor locked. The target is recovered by pairing each lock
+// with that actor's most-recent PRECEDING `actionSubmitted`/`voteCast` for the
+// same day (the engine invariant that re-submitting clears the lock guarantees
+// the locked pick is the last-submitted one). Last-locked-wins within a day
+// (unlock→relock, or a lock after a re-pick, overwrites the earlier row).
+//
+// This is host-ONLY by contract: it reads `actionSubmitted` targets, which the
+// projection strips from every non-host log (`resolvedLog`), so a non-host
+// caller literally cannot reconstruct night targets from their own projection.
+// It takes the raw event log (the host's `game.log`) — NOT a new projection
+// variant, NOT retained raw state. Do NOT wire this onto any player path.
+// ---------------------------------------------------------------------------
+
+export interface NarratorBoardDay {
+  day: number;
+  /** Locked night actions this night, keyed last-locked-wins by actor. */
+  nightActions: { actorId: string; actionType: string; targetId: string | null }[];
+  /** Locked day votes this day, keyed last-locked-wins by voter. Runoff and
+   * initial day votes share a `day` number, so the latest lock (runoff)
+   * naturally supersedes — matching "current locked picture for that day". */
+  dayVotes: { voterId: string; target: string | null }[];
+}
+
+export function narratorBoardHistory(log: GameEvent[]): NarratorBoardDay[] {
+  // Per day, track the most-recent submitted target per actor as we scan, and
+  // snapshot it into the row when that actor locks.
+  const days = new Map<number, {
+    nightSubs: Map<string, { actionType: string; targetId: string | null }>;
+    nightLocked: Map<string, { actionType: string; targetId: string | null }>;
+    voteSubs: Map<string, string | null>;
+    voteLocked: Map<string, string | null>;
+  }>();
+  const dayFor = (d: number) => {
+    let entry = days.get(d);
+    if (!entry) {
+      entry = { nightSubs: new Map(), nightLocked: new Map(), voteSubs: new Map(), voteLocked: new Map() };
+      days.set(d, entry);
+    }
+    return entry;
+  };
+
+  for (const e of log) {
+    if (e.type === "actionSubmitted") {
+      dayFor(e.day).nightSubs.set(e.actorId, { actionType: e.actionType, targetId: e.targetId });
+    } else if (e.type === "actionUnlocked") {
+      dayFor(e.day).nightLocked.delete(e.actorId);
+    } else if (e.type === "actionLocked") {
+      const d = dayFor(e.day);
+      const sub = d.nightSubs.get(e.actorId);
+      // A lock always follows a submit for the currently-held target (engine
+      // invariant); fall back to a null target defensively if not seen.
+      d.nightLocked.set(e.actorId, sub ?? { actionType: "watch", targetId: null });
+    } else if (e.type === "voteCast") {
+      dayFor(e.day).voteSubs.set(e.voterId, e.target);
+    } else if (e.type === "voteRetracted" || e.type === "voteUnlocked") {
+      if (e.type === "voteUnlocked") dayFor(e.day).voteLocked.delete(e.voterId);
+      else dayFor(e.day).voteSubs.delete(e.voterId);
+    } else if (e.type === "voteLocked") {
+      const d = dayFor(e.day);
+      d.voteLocked.set(e.voterId, d.voteSubs.get(e.voterId) ?? null);
+    }
+  }
+
+  return [...days.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([day, d]) => ({
+      day,
+      nightActions: [...d.nightLocked.entries()].map(([actorId, v]) => ({ actorId, actionType: v.actionType, targetId: v.targetId })),
+      dayVotes: [...d.voteLocked.entries()].map(([voterId, target]) => ({ voterId, target })),
+    }));
 }

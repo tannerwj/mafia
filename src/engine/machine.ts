@@ -116,6 +116,17 @@ export function applyCommand(input: GameState, cmd: Command): EngineResult {
       if (cmd.gen !== state.phaseGen) return reject(input, "stale_advance");
       return advancePhase(state, cmd.now, true);
     }
+    if (cmd.type === "reveal") {
+      if (!cmd.byHost) return reject(input, "not_host");
+      // Legal ONLY in a scene-holding phase — a reveal anywhere else is a
+      // loud rejection (the host UI only shows the button in sunrise/sunset),
+      // NOT the silent no-op acknowledge uses for its many uncoordinated
+      // callers. Phase-gate BEFORE the gen guard so a reveal fired outside a
+      // scene phase always reads `reveal_not_active`, never `stale_advance`.
+      if (state.phase !== "sunrise" && state.phase !== "sunset") return reject(input, "reveal_not_active");
+      if (cmd.gen !== state.phaseGen) return reject(input, "stale_advance");
+      return revealScene(state, cmd.now);
+    }
     if (cmd.type === "markAbsent" || cmd.type === "markPresent") {
       if (!cmd.byHost) return reject(input, "not_host", cmd.playerId);
       const player = state.players.find((p) => p.id === cmd.playerId);
@@ -320,13 +331,48 @@ function advanceIfComplete(state: GameState, effects: Effect[], now?: number): E
  * this branch once `mafiaReady` already held. */
 function advancePhase(state: GameState, now?: number, forced = false): EngineResult {
   if (state.phase === "night") {
+    // Spec 12: DEFER RESOLUTION. When scenePhases is on, a NATURAL night-
+    // readiness advance transitions to `sunrise` WITHOUT running resolveNight —
+    // the night stays UNRESOLVED (nothing computed, nothing can leak) until the
+    // host taps `reveal`. A FORCED advance (host force-advance / timer) is the
+    // host's explicit escape hatch and resolves directly to dawn, bypassing the
+    // narration beat (host-only, so no leak concern). sunrise is only ever
+    // reached via the natural all-locked+converged gate, so reveal's non-forced
+    // resolveNight reproduces the same kill.
+    if (state.ruleset.scenePhases && !forced) return { state, effects: transition(state, "sunrise", now) };
+    const resolved = resolveNight(clone(state), currentRoles(), forced);
+    return withWin(resolved, transition(resolved, "dawn", now));
+  }
+  if (state.phase === "sunrise") {
+    // A forced advance out of sunrise (host force-advance / timer) resolves the
+    // deferred night. `reveal` routes here via revealScene too.
     const resolved = resolveNight(clone(state), currentRoles(), forced);
     return withWin(resolved, transition(resolved, "dawn", now));
   }
   if (state.phase === "dawn") return withWin(state, transition(state, "day", now));
-  if (state.phase === "day" || state.phase === "runoff") return resolveVote(state, now);
+  if (state.phase === "day" || state.phase === "runoff") {
+    // Spec 12: symmetric deferral for the day vote — natural readiness → sunset
+    // (vote UNRESOLVED); forced resolves directly to dusk.
+    if (state.ruleset.scenePhases && !forced) return { state, effects: transition(state, "sunset", now) };
+    return resolveVote(state, now);
+  }
+  if (state.phase === "sunset") return resolveVote(state, now);
   if (state.phase === "dusk") return withWin(state, transition(state, "night", now));
   return { state, effects: [] };
+}
+
+/** Spec 12: the host-tapped `reveal`. Resolves the deferred night/vote held in
+ * sunrise/sunset — non-forced (sunrise/sunset are only ever reached via the
+ * natural readiness gate, which already required consensus convergence / all
+ * votes locked, so a non-forced resolution reproduces exactly the outcome the
+ * narrator saw from the locked inputs). */
+function revealScene(state: GameState, now?: number): EngineResult {
+  if (state.phase === "sunrise") {
+    const resolved = resolveNight(clone(state), currentRoles(), false);
+    return withWin(resolved, transition(resolved, "dawn", now));
+  }
+  // sunset
+  return resolveVote(state, now);
 }
 
 function resolveVote(state: GameState, now?: number): EngineResult {
