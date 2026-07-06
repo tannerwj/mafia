@@ -1,8 +1,10 @@
 # Spec 15 — AI narrator ("The Storyteller")
 
-**v3 — 2026-07-06 · Status: review-complete (BUILDABLE per re-review);
-awaiting Tanner sign-off on the open product questions, then orchestrator
-prerequisites (AI binding + bake-off), then build.**
+**v3 — 2026-07-06 · Status: SIGNED OFF by Tanner (all beats · auto-keep
+latest · model-only bible · 5 tones). Ready for build once orchestrator
+prerequisites (AI binding + bake-off) land. The auto-keep amendment
+(§Product shape / §Memory / §Protocol) post-dates the review; the reviewed
+leak/delivery/coordination contracts are unchanged by it.**
 *v3 folds the v2 re-review: queue-of-one/in-flight coordination flag moved
 from DO memory to `ctx.storage` (in-memory slot was the v0 session-state
 anti-pattern — DO eviction mid-AI-call would hang "busy" forever); draft
@@ -100,7 +102,7 @@ An LLM cannot leak what it was never told. The defense is structural:
    host-only fields; anything absent from the public projection.
 4. **Leak tests ship with the build:** seeded full games asserting the
    serialized prompt payload AND the persisted storyState (scenes + bible +
-   bibleUpdates as stored on Keep — m10) never contain living players'
+   bibleUpdates as stored at auto-commit — m10) never contain living players'
    role strings or role-correlated fields from outside the public view.
    Same adversarial style as existing projection leak tests.
 5. **Narrator-eyes-only output** (see Delivery): story content reaches host
@@ -151,7 +153,8 @@ CURRENT phase (or whose phaseGen is stale — §Protocol) is rejected.
 
 - **Where:** host console. "Spin the tale" appears at each legal beat
   (atmosphere button during holds, report button at dawn/dusk, epilogue at
-  end). Draft panel shows [Keep] [Re-spin] [Discard].
+  end). Draft panel shows [Re-spin] [Discard] — no Keep button (auto-keep,
+  below).
 - **Setup:** "Storyteller" card in host lobby, reachable in-game. OFF by
   default (server rejects `generate_story` when disabled). Theme free-text,
   tone picker (noir / cozy / horror / comedy / absurd). Stored in DO
@@ -159,9 +162,17 @@ CURRENT phase (or whose phaseGen is stale — §Protocol) is rejected.
 - **Cast:** first generation invents a one-line persona per player from
   names alone (character bible). Persists; later scenes stay consistent.
   Late joiners get personas on the next generation.
-- **Keep semantics:** Keep commits scene + bibleUpdates to storyState.
-  Re-spin/Discard leave memory untouched. One kept scene per beat instance;
-  keeping again for the same beat instance replaces it.
+- **Keep semantics (auto-keep latest — Tanner sign-off):** the latest
+  non-discarded draft for a beat instance commits to storyState (scene +
+  bibleUpdates) automatically when the beat is superseded: (a) a
+  `generate_story` for a DIFFERENT beat arrives, (b) the phase advances
+  past the beat's legal phase (phaseGen change), or (c) the game ends.
+  [Re-spin] replaces the pending draft (the replaced draft is dropped, not
+  committed). [Discard] drops the pending draft (nothing commits unless
+  the host spins again). The auto-commit write is fire-safe: wrapped so a
+  storyState write failure can never block or fail a phase advance, and it
+  runs strictly AFTER the game-state transition it piggybacks on. One kept
+  scene per beat instance.
 
 ## Memory
 
@@ -181,14 +192,13 @@ storyState = {
 
 - Generation request = settings + bible + last ~6 scenes (+ summary) + the
   beat's facts payload. Model returns structured `{ scene, bibleUpdates }`;
-  bibleUpdates fold in on Keep only.
-- **Unkept drafts are ephemeral by design (M7):** they live in host client
-  state + a transient in-DO-memory slot for the current beat only — NEVER
-  in DO storage. A host reload/reconnect loses any unkept draft; the host
-  simply re-spins. (Do NOT "helpfully" persist unkept drafts — that widens
-  the leak-test surface for no product value.) Kept scenes + bible +
-  settings ride the host snapshot (§Delivery), so reconnect restores
-  everything kept.
+  bibleUpdates fold in at auto-commit (§Product shape Keep semantics).
+- **Pending (not-yet-committed) drafts are ephemeral by design (M7):** the
+  draft TEXT lives in host client state + DO memory for the current beat
+  only — never in DO storage until auto-commit fires. A host reload or DO
+  eviction mid-beat loses the pending draft; the host simply re-spins.
+  Committed scenes + bible + settings ride the host snapshot (§Delivery),
+  so reconnect restores everything committed.
 - Cleared on rematch. Capped (~32KB) via summary folding.
 - Eager-init at room claim (default `{enabled:false, ...}`), mirroring the
   `PENDING_RULESET_KEY` pattern — no lazy-init ambiguity.
@@ -201,7 +211,7 @@ New in `src/shared/protocol.ts`:
 // client → server (host-only; rejected for players like other host-only msgs)
 { type: "set_story_settings", enabled: boolean, theme: string, tone: Tone }
 { type: "generate_story", beat: BeatId, phaseGen: number, requestId: string }
-{ type: "keep_story", requestId: string }   // commits the matching draft
+{ type: "discard_story", requestId: string } // drops the pending draft (auto-keep otherwise)
 // server → host sockets only
 { type: "story_draft", requestId: string, beat: BeatId, phaseGen: number, text: string }
 { type: "story_error", requestId: string, code: "disabled" | "busy" |
@@ -281,20 +291,21 @@ New in `src/shared/protocol.ts`:
 3. Server: settings round-trip incl. OFF-rejects-generate; beat/phase
    legality table; phaseGen staleness; queue-of-one busy; rate limit; AI
    failure → error code, game state untouched; keep→memory grows,
-   re-spin/discard don't; unkept draft absent from storage; rematch clears;
+   auto-commit on beat supersession/phase advance/game end; re-spin
+   replaces without committing; discard commits nothing; pending draft
+   absent from storage pre-commit; commit failure never blocks a phase
+   advance; rematch clears;
    multi-host-socket delivery; player socket never sees story_*.
 4. E2E (fake mode): host enables, plays to a hold → atmosphere spin; taps
-   Reveal → morning-report spin → Keep; reload host mid-unkept-draft →
-   draft gone, kept history intact; player client asserts zero story
-   surface the whole game.
+   Reveal → morning-report spin → advance (auto-keep) → committed scene in
+   host history; reload host mid-pending-draft → draft gone, committed
+   history intact; player client asserts zero story surface the whole game.
 5. Live: real generation on prod at all three beat families; Tanner judges
    the fun.
 
-## Open questions for Tanner (unchanged from v1 + one new)
+## Sign-off record (2026-07-06)
 
-- Beat set right? (atmosphere holds, morning report, post-vote, epilogue.)
-- Should Keep be implicit (auto-keep the last draft when the next beat
-  fires)?
-- Persona bible host-editable (v1.1)?
-- Tone list good? (noir / cozy / horror / comedy / absurd)
-- NEW: atmosphere beats worth it at all, or v1 = report beats only?
+Tanner confirmed: all beats (atmosphere holds + morning report + post-vote
++ epilogue) · auto-keep latest (no Keep button; [Re-spin]/[Discard] only) ·
+persona bible model-only in v1 (host editing v1.1) · tone list noir / cozy
+/ horror / comedy / absurd.
