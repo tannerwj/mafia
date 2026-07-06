@@ -408,3 +408,6 @@ history above, and `CLAUDE.md` (operating rules + "process rules learned").
   phaseGen+requestId staleness, ephemeral unkept drafts). v2 re-review in
   flight; then Tanner sign-off + orchestrator AI-binding prereq + model
   bake-off before build.
+- Spec 14 DEPLOYED to mafia.tannerwj.com (version 12092f93), Tanner-
+  approved; prod 200, wakeLock in live bundle. Real-phone check at next
+  playtest.
