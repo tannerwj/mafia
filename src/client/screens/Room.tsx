@@ -17,6 +17,7 @@ import { Button } from "../components/ui/button";
 import type { Auth } from "../net/RoomConnection";
 import { useGameStore } from "../store/gameStore";
 import { navigate } from "../useRoute";
+import { useWakeLock } from "../useWakeLock";
 import ConnectionBanner from "./ConnectionBanner";
 import GameScreen from "./game/GameScreen";
 import HostGame from "./host/HostGame";
@@ -234,6 +235,14 @@ export default function Room({ code }: { code: string }) {
   }
 
   const backups = useMemo(() => getSeatBackups(code), [code, phase.name]);
+
+  // Spec 14: keep the screen awake for the whole time this session holds a
+  // live seat — player or host console alike, lobby through game end — so a
+  // mid-game OS idle-lock doesn't silently drop the WebSocket for someone who
+  // isn't actively touching their phone (e.g. a night actor waiting to act).
+  // Deliberately NOT active on the landing page or any pre-connect phase
+  // (picking-seat, choosing-identity, etc.) — those aren't "in the room" yet.
+  useWakeLock(phase.name === "connected");
 
   if (phase.name === "not-found") {
     return (

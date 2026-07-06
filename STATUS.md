@@ -389,3 +389,22 @@ history above, and `CLAUDE.md` (operating rules + "process rules learned").
   players joining live-tracked the editor to 1 mafia / 1 detective /
   1 villager with "Suggested for 3" hint and START GAME enabled with zero
   manual edits (previously impossible — old defaults invalid at 3-4).
+
+## 2026-07-06 — SPEC 14 (wake lock) + SPEC 15 (AI narrator) in flight
+- Spec 14 screen wake lock (the wake-lock slice of the Spec 07 bundle):
+  WakeLockManager (src/client/net/wakeLock.ts, injected deps, 12 unit
+  tests) + thin useWakeLock hook wired in Room.tsx for phase "connected"
+  (covers lobby→game end, player + host). Silent failure by design.
+  Verified: typecheck clean; engine 170 / client 32 / server 49; E2E 41/41.
+  Real-device confirmation deferred to Tanner's next playtest (headless
+  can't exercise wake lock). Committed; deploy pending Tanner go-ahead.
+- Spec 15 AI narrator drafted (docs/specs/15-ai-narrator.md): Workers AI
+  storyteller, narrator-eyes-only, public-projection-only prompts,
+  character bible + scene memory. Adversarial review v1 verdict NEEDS
+  REDESIGN (2 killers: missing env.AI binding; sunrise-hold beat wanted
+  facts that don't exist pre-reveal). All 11 findings folded to v2 (beat
+  split atmosphere/report, buildStoryFacts = projectFor(state,
+  {kind:"public"}), host-gated ClientRoomState.story + sendToHostSockets,
+  phaseGen+requestId staleness, ephemeral unkept drafts). v2 re-review in
+  flight; then Tanner sign-off + orchestrator AI-binding prereq + model
+  bake-off before build.
