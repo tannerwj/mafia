@@ -22,6 +22,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Stamp } from "../../components/ui/dossier";
 import HelpButton from "../../components/HelpButton";
+import QrCode from "../../components/QrCode";
 import { HOUSE_RULES, recommendedRoleCounts, validateRuleset, type Ruleset } from "../../../engine";
 import {
   countsFromRecommendation,
@@ -268,7 +269,7 @@ export default function HostLobby({
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <span
           data-testid="room-code"
           className="rounded-sm border border-frame bg-ink-2 px-6 py-3 text-3xl tracking-[0.3em] text-brass-hi"
@@ -287,6 +288,17 @@ export default function HostLobby({
             Subjects ({playerCount})
           </p>
           <PlayerTable rows={rows} inGame={false} lobbyMode onKick={onKick} />
+
+          <div className="flex flex-col items-center gap-2 self-start rounded-sm border border-frame bg-ink-2 p-3">
+            <p className="text-[0.65rem] uppercase tracking-[0.2em] text-smoke">
+              Scan to join
+            </p>
+            <QrCode
+              value={`${location.origin}/room/${state.roomCode}`}
+              size={224}
+              className="rounded-sm"
+            />
+          </div>
         </div>
 
         <div className="flex flex-col gap-4">

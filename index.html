@@ -17,6 +17,7 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
+    <link rel="canonical" href="https://mafia.tannerwj.com/" />
 
     <!-- Open Graph (iMessage, Discord, Slack, Facebook…) -->
     <meta property="og:type" content="website" />
@@ -40,6 +41,20 @@
       content="One host runs the whole table from a phone. No cards, no eyes-closed, no cheating."
     />
     <meta name="twitter:image" content="https://mafia.tannerwj.com/og.png" />
+
+    <!-- JSON-LD (F4): truthful, minimal WebApplication schema. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Mafia",
+        "url": "https://mafia.tannerwj.com/",
+        "description": "Host a game of Mafia from your phone. One arbitrator runs the table — no cards, no eyes-closed, no cheating. Just pure deduction.",
+        "applicationCategory": "GameApplication",
+        "operatingSystem": "Any (web)",
+        "isAccessibleForFree": true
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

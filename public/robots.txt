@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /room/
+
+Sitemap: https://mafia.tannerwj.com/sitemap.xml

@@ -30,7 +30,23 @@
     }
   ],
   "assets": {
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    "binding": "ASSETS",
+    // Spec 16 D3: the Worker must see `/room/:code` GET requests (to rewrite
+    // per-room OG/robots meta) before the assets layer serves the SPA
+    // fallback HTML for them. Every other path keeps today's asset-first
+    // routing untouched.
+    // "/api/*" must be listed too: once run_worker_first is an explicit list,
+    // the dev asset layer answers unlisted non-asset paths itself (a POST to
+    // /api/rooms got a static 405 instead of the worker — 2026-07-06).
+    "run_worker_first": ["/room/*", "/api/*"],
+    // The Cloudflare Vite plugin doesn't need this (it points `dev`/`build`
+    // at the client build output itself) — but `vitest-pool-workers` loads
+    // this file directly with no Vite involvement, so `env.ASSETS` needs an
+    // explicit directory to serve from. Means `dist/client` must exist
+    // (`vite build`) before the `server` test project's D3 tests can pass;
+    // see 16-implementation-notes.md.
+    "directory": "dist/client"
   },
   // Spec 17: every trace captured (traffic is tiny; default is also 1 but
   // we pin it so a future template change can't silently sample us down).
