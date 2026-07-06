@@ -284,3 +284,71 @@
   accessible one-tap "My Role" (privacy-preserving) + instructions modal
   (reuse roleCopy.ts). Review disproved its own hang/absence/designated
   worries against current code. Next: build Spec 08 → verify → deploy.
+
+---
+
+## ====== HANDOFF (2026-07-06, ~end of build session 1) ======
+
+**READ THIS FIRST if you're picking up the project.** Then skim
+`docs/ORCHESTRATION-PLAYBOOK.md` (§10b = throughput lessons), this file's
+history above, and `CLAUDE.md` (operating rules + "process rules learned").
+
+### Where it stands — SHIPPED & LIVE
+- Deployed to **https://mafia.tannerwj.com** (Cloudflare Worker `mafia-game`
+  + DO `GameRoom`, custom domain in `wrangler.jsonc`). Deploy = `npm run
+  deploy` (or `npx wrangler deploy` after `npm run build`). Auth: `wrangler`
+  logged in as tannerwj@pm.me.
+- **The whole game works and is playable.** Full history in commits; the arc:
+  Spec 00 scaffold → 01 identity/rooms → 02 engine → 03 DO integration →
+  04 player UI → 05 host console → 08 team lock-in/roles/instructions →
+  10 "Case File" visual identity (current look) → 11 day-confirm + decoy
+  night + morning report + narrator role counts (unlocks <5 players) →
+  12 narrator vote/status board + optional sunrise/sunset + all-player game
+  status. Plus deployed hotfixes (silent join errors) + metadata (favicon,
+  OG share card, PWA manifest).
+- Suites at HEAD: typecheck clean · engine 59 · client 10 · server 49 ·
+  Playwright E2E 41. All green.
+
+### Tech / how to verify (LEARN THE COORDINATION DISCIPLINE)
+- Stack: TS everywhere; Vite+React+Tailwind4 client; pure-TS engine
+  (`src/engine`, no I/O, seeded RNG); DO in `src/server`; shared types in
+  `src/shared` (protocol.ts + game-view.ts). `docs/specs/NN-*.md` are the
+  contracts; `NN-implementation-notes.md` are the builders' notes.
+- Verify: `npm run typecheck && npm test`; E2E is alarm-timing sensitive and
+  flaps under machine load. **The #1 self-inflicted time sink was port/state
+  collisions** — ONE dev server, ONE test runner: kill stray vite/
+  headless-chromium, `rm -rf .wrangler/state` ONLY while no server runs,
+  start one server, confirm it 200s a few times, THEN `npx playwright test
+  --workers=1`. NEVER run a verify while a delegated agent holds the port.
+- Process model (Tanner-endorsed): orchestrator STAYS orchestrator (delegate
+  all code to Codex/subagents, own verification+deploy, never hand-write
+  src/); DON'T cut verification to go faster; TIER the ceremony to risk
+  (correctness/leak-critical → full spec+adversarial-review; low-risk UI/copy
+  → delegated+verified, no review round, targeted tests). Batch feedback.
+  Watchdogs: rely on the agent's completion notification + ONE backstop
+  (long background bash dies at ~15min/exit-144). Judge done by artifacts on
+  disk (STATUS marker in the NN-implementation-notes.md), never wrapper chatter.
+
+### REMAINING / NEXT WORK
+- Tanner's feedback backlog is CLEARED (see `docs/specs/FEEDBACK-backlog.md`).
+- Not built (deferred, optional): **Spec 07 polish** — screen wake-lock
+  (phones sleeping mid-game), QR-code join, sound/haptic phase cues, game
+  history/replay. Task #8 on the board.
+- Also un-built from the original roadmap: nothing critical — the "role
+  packs" (Godfather/Framer/Jester/etc.) are v1.1 and the engine already
+  supports them structurally (RoleDef + NAR bands 100/450 reserved). Only the
+  house six ship today.
+- Next likely input: another round of Tanner playtest feedback. Capture it in
+  a backlog doc, tier it, spec the engine-touching parts, delegate, verify,
+  deploy. Same loop.
+
+### GOTCHAS worth knowing
+- Engine is pure: no Date.now/Math.random/cloudflare imports in `src/engine`
+  (clock+RNG injected; RNG cursor in GameState). Grep-enforced.
+- `projectFor` (src/engine/project.ts) is the SOLE visibility authority —
+  every "who can see what" decision lives there. Leak bugs = look here first.
+- Test seed: `start_game` honors a `seed` only when env `ALLOW_TEST_SEED=1`
+  (`.dev.vars` + pool-workers config; production ignores it — verified).
+- `.dev.vars` and `.claude/worktrees/` are gitignored.
+- Reserved-but-unexercised: NAR bands 100 (control/redirect) & 450 (reactive)
+  for future roles.
