@@ -441,3 +441,14 @@ history above, and `CLAUDE.md` (operating rules + "process rules learned").
   effectively 45/45.
 - NOT yet deployed. Live verification pending: real Scout generations on
   prod at all three beat families after Tanner's deploy go-ahead.
+- DEPLOYED (version aa858acd) with env.AI + STORYTELLER_MODEL bindings
+  live. LIVE-VERIFIED on prod, real browser 3-player game: Storyteller
+  setup card (off-by-default, theme+tone), settings persisted to the
+  board ("STORYTELLER: ON"), real Scout generation at the epilogue beat
+  (coherent themed comedy; second spin riffed on the dead player's
+  absence), graceful-failure path exercised for real ("The muse is
+  silent — try again" on a transient error, TRY AGAIN recovered),
+  player tab showed ZERO story surface. Known quality note for
+  playtests: a 1-night parity game gives the model thin material; first
+  spin invented a fictional camper (fiction, not a leak) — judge prompt
+  quality at a real multi-night table before tuning.
