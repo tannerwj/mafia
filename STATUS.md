@@ -384,3 +384,8 @@ history above, and `CLAUDE.md` (operating rules + "process rules learned").
   role map — do it only in a dedicated pass that regenerates all maps.
 - Verified fresh by orchestrator: typecheck clean; engine 170 / client 20 /
   server 49; Playwright 41/41 (3.3m, workers=1, clean state).
+- DEPLOYED to mafia.tannerwj.com (version 05b26fa2). Live-verified in real
+  browser tabs on prod: fresh room pre-fills the n=1 recommendation; three
+  players joining live-tracked the editor to 1 mafia / 1 detective /
+  1 villager with "Suggested for 3" hint and START GAME enabled with zero
+  manual edits (previously impossible — old defaults invalid at 3-4).
