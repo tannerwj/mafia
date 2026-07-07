@@ -769,6 +769,67 @@ describe("Spec 17 D4: ended-game TTL", () => {
       expect(room).toBeDefined();
     });
   });
+
+  // The three tests above poke `room.phase = "ended"` directly into storage
+  // to isolate the TTL arithmetic — they never prove a REAL finished game
+  // actually leaves room.phase set to "ended" in storage. This test drives
+  // an actual game to its real ended state via applyGameResult (the same
+  // path a live win takes), closes every socket (the wipe only considers
+  // idle rooms — see "no wipe while any socket is connected" above), then
+  // backdates lastActivityAt and confirms the wipe still fires. This is the
+  // regression guard for the room.phase-is-real-not-dead-code finding from
+  // the alarm-loop hotfix investigation.
+  test("wipes a room whose game reached 'ended' through a REAL play-through (not a manual phase poke), +2h idle", async () => {
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+
+    // Fast-forward to a village win, same shortcut as the new_game test:
+    // force through night 1 (no actions -> nobody dies), force through dawn,
+    // then a direct-elimination day vote.
+    sendGame(game.hostWs, { type: "force_advance", gen: 0 });
+    const afterNight1 = await drainSnapshots(game);
+    expect(afterNight1.detective.phase).toBe("dawn");
+
+    sendGame(game.hostWs, { type: "force_advance", gen: afterNight1.detective.game!.phaseGen });
+    const afterDawn = await drainSnapshots(game);
+    expect(afterDawn.detective.phase).toBe("day");
+
+    const final = await voteConfirmAll(game, game.mafia.playerId, [
+      game.angel,
+      game.villager1,
+      game.detective,
+      game.villager2,
+      game.mafia,
+    ]);
+    expect(final.detective.phase).toBe("ended");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+
+    const stub = await stubFor(game.roomCode);
+
+    // Confirm the real path (not a test poke) actually wrote phase: "ended"
+    // onto RoomMeta before backdating and firing the alarm.
+    await runInDurableObject(stub, async (_instance, state) => {
+      const room = await state.storage.get<{ phase: string; lastActivityAt: number }>("room");
+      expect(room?.phase).toBe("ended");
+      await state.storage.put("room", {
+        ...room,
+        lastActivityAt: Date.now() - (2 * 60 * 60 * 1000 + 1000),
+      });
+    });
+
+    await runDurableObjectAlarm(stub);
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      const room = await state.storage.get("room");
+      expect(room).toBeUndefined();
+    });
+  });
 });
 
 describe("Spec 17 D4: alarm re-arm on WebSocket accept", () => {
@@ -1389,6 +1450,71 @@ describe("timer path and stale-alarm no-op", () => {
     game.detective.ws.close();
     game.villager2.ws.close();
     game.mafia.ws.close();
+  });
+
+  test("hotfix regression: a stale gameDeadlineAt on an ENDED game is cleared, not re-armed into a hot loop", async () => {
+    // Prod incident (room JH3KD): a game ended, but GAME_DEADLINE_KEY
+    // survived in storage from before the win. Unlike the force-advance
+    // case above (where a NEWER deadline replaces the stale one and the
+    // no-op is genuinely harmless), an ended game's state.deadlineAt is
+    // permanently null — cmd.at can never again equal it, so the no-op
+    // fires forever and, pre-fix, scheduleNextAlarm() kept re-arming on
+    // that same past-due value: an immediate re-fire, every time, with no
+    // upper bound. Reproduce by planting a past-due key directly (any
+    // mechanism that leaves a stale key behind hits the same failure
+    // mode) on a game already at "ended".
+    const game = await setUpFivePlayerRoom();
+    await startScriptedGame(game);
+    sendGame(game.hostWs, { type: "force_advance", gen: 0 });
+    const afterNight1 = await drainSnapshots(game);
+    sendGame(game.hostWs, { type: "force_advance", gen: afterNight1.detective.game!.phaseGen });
+    const afterDawn = await drainSnapshots(game);
+    expect(afterDawn.detective.phase).toBe("day");
+    const final = await voteConfirmAll(game, game.mafia.playerId, [
+      game.angel,
+      game.villager1,
+      game.detective,
+      game.villager2,
+      game.mafia,
+    ]);
+    expect(final.detective.phase).toBe("ended");
+    expect(final.detective.game?.deadlineAt).toBeNull();
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+
+    const stub = await stubFor(game.roomCode);
+    const stalePastDue = Date.now() - 15_362_000; // mirrors the prod drift
+    await runInDurableObject(stub, async (_instance, state) => {
+      await state.storage.put("gameDeadlineAt", stalePastDue);
+    });
+
+    const ran = await runDurableObjectAlarm(stub);
+    expect(ran).toBe(true);
+
+    const afterFirstFire = await runInDurableObject(stub, async (_instance, state) => {
+      return state.storage.get<number>("gameDeadlineAt");
+    });
+    expect(afterFirstFire).toBeUndefined();
+
+    // The regression itself: without the fix, scheduleNextAlarm() would
+    // have re-armed on that same past-due value, so Miniflare's own alarm
+    // clock would already be sitting on a due (or past-due) time and a
+    // second forced run would fire `game_deadline` again. With the fix,
+    // nothing game-deadline-shaped remains armed — the next run (if
+    // anything is armed at all, e.g. the absolute TTL) must NOT be another
+    // game_deadline fire.
+    const ranAgain = await runDurableObjectAlarm(stub);
+    if (ranAgain) {
+      const secondFire = await runInDurableObject(stub, async (_instance, state) => {
+        return state.storage.get<number>("gameDeadlineAt");
+      });
+      expect(secondFire).toBeUndefined();
+    }
   });
 });
 

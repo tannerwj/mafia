@@ -487,3 +487,19 @@ history above, and `CLAUDE.md` (operating rules + "process rules learned").
   (no-horizontal-overflow + min padding, testid-anchored + polled after
   an anchor-race fix). Verified: 358 unit + E2E 51/51 + live 360px tour.
 - All three committed, NOT yet deployed (batch deploy pending Tanner).
+- POLISH BATCH DEPLOYED (e0c819a1) + live-verified: canonical/JSON-LD/
+  robots/sitemap/invite-cards/noindex/client-error all confirmed on prod;
+  structured events confirmed flowing via wrangler tail.
+- OBSERVABILITY PAID OFF IN 15 MINUTES: tail revealed room JH3KD in a hot
+  alarm loop (~85ms game_deadline refire, 4+ hours, drift 15,362s).
+  PRE-EXISTING bug: engine no-ops a stale timerExpired (correct) but the
+  no-op path skips applyEffects, so GAME_DEADLINE_KEY is never cleared and
+  scheduleNextAlarm re-arms on the past value forever. Bonus finding: the
+  loop reset its own lastActivityAt via touchAndBroadcast every firing, so
+  the TTL wipe could never trip — self-sustaining. (room.phase="ended"
+  suspicion DISPROVEN — applyGameResult does persist it on real
+  transitions.) HOTFIX: alarm() deletes the key when it still holds the
+  exact proven-stale value post-apply; can't clobber real consumption.
+  Tests: direct loop repro w/ prod drift magnitude + real-play-through
+  ended_ttl wipe (replacing the storage-poke test that masked coverage).
+  Verified: 360 unit + E2E 51/51.

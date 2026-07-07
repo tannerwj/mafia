@@ -1373,7 +1373,21 @@ export class GameRoom extends DurableObject<Env> {
     // concern — skip and let scheduleNextAlarm() below re-arm for it. If
     // due, apply {timerExpired, at}; the engine itself validates
     // `at === state.deadlineAt` and no-ops otherwise, so an alarm that fires
-    // for a deadline a force-advance already consumed is harmless.
+    // for a deadline a force-advance already consumed is harmless IF that
+    // force-advance armed a newer deadline — scheduleNextAlarm() then re-arms
+    // for the newer value, not the stale one.
+    //
+    // But a stale gameDeadlineAt that will NEVER again match state.deadlineAt
+    // (the game ended, or otherwise stopped arming deadlines) is a hot-loop
+    // hazard: applyGameResult's no-op path returns before applyEffects runs,
+    // so GAME_DEADLINE_KEY is never cleared, and scheduleNextAlarm() below
+    // re-reads that same past-due value and re-arms on it — firing again
+    // immediately, forever (prod incident, room JH3KD: 85ms-interval firing
+    // for 4+ hours). Guard: after the no-op, if the key still holds this
+    // EXACT value we just proved stale, delete it ourselves so nothing re-
+    // arms on it. A real consumption (engine applied a setDeadline/
+    // clearDeadline effect) has already changed or removed the key by now,
+    // so this never clobbers the legitimate case.
     const gameDeadlineAt = await this.ctx.storage.get<number>(
       GAME_DEADLINE_KEY,
     );
@@ -1389,6 +1403,11 @@ export class GameRoom extends DurableObject<Env> {
           now,
         });
         await this.applyGameResult(result, game);
+
+        const stillStale = await this.ctx.storage.get<number>(GAME_DEADLINE_KEY);
+        if (stillStale === gameDeadlineAt) {
+          await this.ctx.storage.delete(GAME_DEADLINE_KEY);
+        }
       }
     }
 
