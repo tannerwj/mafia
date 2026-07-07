@@ -503,3 +503,6 @@ history above, and `CLAUDE.md` (operating rules + "process rules learned").
   Tests: direct loop repro w/ prod drift magnitude + real-play-through
   ended_ttl wipe (replacing the storage-poke test that masked coverage).
   Verified: 360 unit + E2E 51/51.
+- HOTFIX DEPLOYED (07912be9): post-deploy tail shows 0 alarm_fired in
+  20s (was 90/14s). Loop dead; incident closed same evening it became
+  observable.
