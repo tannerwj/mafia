@@ -259,7 +259,7 @@ export default function HostLobby({
             <p className="text-[0.6rem] uppercase tracking-[0.3em] text-smoke">
               Lead investigator
             </p>
-            <h1 className="file-heading text-2xl text-blood">The Case Room</h1>
+            <h1 className="file-heading text-2xl text-blood-hi">The Case Room</h1>
           </div>
           <Stamp variant="confidential" className="hidden text-[0.6rem] sm:inline-flex" />
         </div>

@@ -31,7 +31,7 @@ export default function DeadlineCountdown({ deadlineAt }: { deadlineAt: number |
     <span
       data-testid="phase-countdown"
       data-remaining-sec={remainingSec}
-      className={`tabular-nums ${remainingSec <= 5 ? "text-blood" : "text-brass-hi"}`}
+      className={`tabular-nums ${remainingSec <= 5 ? "text-blood-hi" : "text-brass-hi"}`}
     >
       {label}
     </span>

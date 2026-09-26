@@ -11,28 +11,65 @@ function revealForPublic(state: GameState, playerId: string) {
   return {};
 }
 
-function hiddenVotingFilter(state: GameState, event: GameEvent, god: boolean): boolean {
-  if (god || state.ruleset.votingVisibility === "realtime" || state.phase === "dusk" || state.phase === "ended") return true;
-  // Spec 11: `voteLocked`/`voteUnlocked` are the confirm-step analog of
-  // `voteCast`/`voteRetracted` — same hidden-voting sealing (they'd leak who
-  // has locked, a per-seat signal).
-  return (
-    event.type !== "voteCast" &&
-    event.type !== "voteRetracted" &&
-    event.type !== "voteLocked" &&
-    event.type !== "voteUnlocked"
-  );
+// Player/public snapshots deliberately use an allowlist. A denylist is too
+// easy to bypass when a new event carries a role, target, tier, or timing
+// signal, and the serialized snapshot is itself part of the privacy boundary.
+const PUBLIC_LOG_TYPES = new Set<GameEvent["type"]>([
+  "phaseChanged",
+  "runoffStarted",
+  "voteResolved",
+  "playerAbsent",
+  "playerPresent",
+  "gameEnded",
+]);
+
+// A dead player's god view keeps the resolved case history promised by the
+// plan. Submission/lock/ballot events remain forbidden: their presence would
+// reveal who is currently acting if a dead player's phone is visible nearby.
+const DEAD_LOG_TYPES = new Set<GameEvent["type"]>([
+  ...PUBLIC_LOG_TYPES,
+  "gameStarted",
+  "attackAttempted",
+  "investigationResult",
+  "playerDied",
+]);
+const LIVE_SIGNAL_TYPES = new Set<GameEvent["type"]>([
+  "actionSubmitted",
+  "actionLocked",
+  "actionUnlocked",
+  "voteCast",
+  "voteRetracted",
+  "voteLocked",
+  "voteUnlocked",
+  "acknowledged",
+]);
+
+function publicLog(state: GameState): GameEvent[] {
+  return state.log.filter((event) => {
+    if (event.type === "playerDied") return state.ruleset.revealOnDeath === "full";
+    return PUBLIC_LOG_TYPES.has(event.type);
+  });
 }
 
-function resolvedLog(state: GameState, god: boolean): GameEvent[] {
-  // Spec 11: `actionSubmitted` (any type, incl. the decoy `"watch"`) and
-  // `acknowledged` are per-seat action signals — stripped for non-god viewers
-  // so a player never sees who acted/acknowledged (the no-pending-count leak
-  // ban extends to the log, not just aggregate fields).
-  const log = god
-    ? state.log
-    : state.log.filter((e) => e.type !== "actionSubmitted" && e.type !== "acknowledged");
-  return log.filter((e) => hiddenVotingFilter(state, e, god));
+function deadResolvedLog(state: GameState): GameEvent[] {
+  return state.log.filter((event) => {
+    if (LIVE_SIGNAL_TYPES.has(event.type)) return false;
+    return DEAD_LOG_TYPES.has(event.type);
+  });
+}
+
+function projectedLog(state: GameState, hostLive: boolean, deadViewer: boolean): GameEvent[] {
+  if (hostLive) return state.log;
+  if (deadViewer) return deadResolvedLog(state);
+  return publicLog(state);
+}
+
+function failedAttackDays(state: GameState): number[] {
+  return [...new Set(
+    state.log
+      .filter((event): event is Extract<GameEvent, { type: "attackAttempted" }> => event.type === "attackAttempted" && event.outcome === "failed")
+      .map((event) => event.day),
+  )].sort((a, b) => a - b);
 }
 
 // Host-only, night-phase-only per-seat "acted" signal (Spec 02 v2.7). Only
@@ -103,6 +140,7 @@ export function projectFor(state: GameState, viewer: Viewer): ClientGameView {
   const viewerPlayer = viewer.kind === "player" ? state.players.find((p) => p.id === viewer.id) : undefined;
   const god = viewer.kind === "host" || (!!viewerPlayer && !viewerPlayer.alive) || state.phase === "ended";
   const hostLive = viewer.kind === "host";
+  const deadViewer = viewer.kind === "player" && !!viewerPlayer && !viewerPlayer.alive;
   const view: ClientGameView = {
     phase: state.phase,
     day: state.day,
@@ -124,7 +162,8 @@ export function projectFor(state: GameState, viewer: Viewer): ClientGameView {
         ...(acted !== undefined ? { acted } : {}),
       };
     }),
-    log: resolvedLog(state, hostLive),
+    log: projectedLog(state, hostLive, deadViewer),
+    attackFailedDays: failedAttackDays(state),
     winners: state.winners,
     // Spec 12 Feature 3: aggregate-only game status for every viewer.
     rolesRemaining: rolesRemaining(state),
@@ -136,9 +175,13 @@ export function projectFor(state: GameState, viewer: Viewer): ClientGameView {
   // sees NEITHER the full ballots NOR a `voted` id list — that list is a
   // per-seat "who has voted" signal (a denominator in disguise). Only realtime
   // rooms (an explicit ruleset opt-in) expose ballots to players, and only the
-  // god view (host / dead / ended) sees the full tally. A player learns their
-  // own vote/lock state solely through `you.currentVote`/`you.dayVoteLocked`.
-  if (state.ruleset.votingVisibility === "realtime" || god || state.phase === "dusk" || state.phase === "ended") view.votes = state.votes;
+  // host/realtime/resolved views see the full tally. A player learns their own
+  // vote/lock state solely through `you.currentVote`/`you.dayVoteLocked`.
+  // Dead-player god status grants resolved history and roles, not live
+  // authority. Hidden ballots therefore remain host-only; realtime voting is
+  // an explicit ruleset grant. Do not widen this at dusk/ended: stale
+  // persisted ballots must never become visible just because a phase changed.
+  if (state.ruleset.votingVisibility === "realtime" || hostLive) view.votes = state.votes;
   if (viewerPlayer) {
     const role = getRole(currentRoles(), viewerPlayer.roleId);
     const you: NonNullable<ClientGameView["you"]> = { playerId: viewerPlayer.id, alive: viewerPlayer.alive, roleId: viewerPlayer.roleId };
@@ -149,11 +192,13 @@ export function projectFor(state: GameState, viewer: Viewer): ClientGameView {
     // must stay private, and those never appear on `you`. Spec 11: expose the
     // individual lock state + whether this player's night input is the decoy,
     // so the UI can render the "keep an eye on someone" panel + confirm.
-    if (pending) {
-      you.pendingAction = { actionType: pending.actionType, targetId: pending.targetId };
-      you.nightActionLocked = pending.locked;
+    if (viewerPlayer.alive) {
+      if (pending) {
+        you.pendingAction = { actionType: pending.actionType, targetId: pending.targetId };
+        you.nightActionLocked = pending.locked;
+      }
+      if (mafiaVote) you.pendingAction = { actionType: "mafiaKill", targetId: mafiaVote.targetId };
     }
-    if (mafiaVote) you.pendingAction = { actionType: "mafiaKill", targetId: mafiaVote.targetId };
     if (viewerPlayer.alive && state.phase === "night") {
       const spec = activeNightActionFor(state, currentRoles(), viewerPlayer.id);
       if (spec?.decoy) you.nightIsDecoy = true;
@@ -222,8 +267,8 @@ export function projectFor(state: GameState, viewer: Viewer): ClientGameView {
 // (unlock→relock, or a lock after a re-pick, overwrites the earlier row).
 //
 // This is host-ONLY by contract: it reads `actionSubmitted` targets, which the
-// projection strips from every non-host log (`resolvedLog`), so a non-host
-// caller literally cannot reconstruct night targets from their own projection.
+// safe allowlist strips from every non-host log, so a non-host caller literally
+// cannot reconstruct night targets from their own projection.
 // It takes the raw event log (the host's `game.log`) — NOT a new projection
 // variant, NOT retained raw state. Do NOT wire this onto any player path.
 // ---------------------------------------------------------------------------

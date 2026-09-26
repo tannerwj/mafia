@@ -1,17 +1,8 @@
-// Dawn/Dusk announcement interstitials (D2): big serif announcement text
-// derived from `log` events. This is display formatting of events the
-// engine already emitted — e.g. rendering `attackAttempted{outcome:
-// 'failed'}` as "The attack failed" — never a new game concept invented
-// client-side.
-//
-// The log only carries events since the last snapshot the viewer already
-// knows about is NOT tracked here (no separate "seen" bookkeeping — that
-// would be client-side state drifting from the server). Instead this reads
-// the most recent relevant event(s) for the CURRENT day from `game.log`
-// every render, which the projection already scopes correctly per-viewer
-// (`resolvedLog` in src/engine/project.ts filters hidden-vote events and
-// strips `actionSubmitted` for non-god viewers).
-import type { ClientGameView, GameEvent } from "../../../shared/game-view";
+// Dawn/Dusk announcement interstitials (D2): big serif announcement text.
+// Resolved deaths come from the projection's graveyard, while the failed
+// attack aggregate and public vote events preserve the table-facing wording
+// without exposing actor/target details through `game.log`.
+import type { ClientGameView } from "../../../shared/game-view";
 import { acknowledge } from "../../store/gameStore";
 
 function playerLabel(playerNames: Map<string, string>, id: string): string {
@@ -19,28 +10,17 @@ function playerLabel(playerNames: Map<string, string>, id: string): string {
 }
 
 function describeDeath(
-  event: Extract<GameEvent, { type: "playerDied" }>,
+  death: ClientGameView["graveyard"][number],
   playerNames: Map<string, string>,
 ): string {
-  const name = playerLabel(playerNames, event.playerId);
-  return event.cause === "night"
+  const name = playerLabel(playerNames, death.playerId);
+  return death.cause === "night"
     ? `${name} was found dead.`
     : `${name} was murdered by the village.`;
 }
 
-function describeAttack(
-  event: Extract<GameEvent, { type: "attackAttempted" }>,
-): string | null {
-  // Only the outcome is announced (attacker/defender identities stay
-  // private) — matches the spec's exact example: "The attack failed."
-  if (event.outcome === "failed") return "The attack failed.";
-  return null; // a landed attack is announced via the resulting playerDied event instead
-}
-
-function eventsForDay(game: ClientGameView, day: number): GameEvent[] {
+function publicOutcomeEventsForDay(game: ClientGameView, day: number) {
   return game.log.filter((e) => {
-    if (e.type === "playerDied") return e.day === day;
-    if (e.type === "attackAttempted") return e.day === day;
     if (e.type === "voteResolved") return e.day === day;
     if (e.type === "runoffStarted") return e.day === day;
     return false;
@@ -51,15 +31,18 @@ function announcementsFor(
   game: ClientGameView,
   playerNames: Map<string, string>,
 ): string[] {
-  const events = eventsForDay(game, game.day);
   const lines: string[] = [];
-  for (const event of events) {
-    if (event.type === "attackAttempted") {
-      const line = describeAttack(event);
-      if (line) lines.push(line);
-    } else if (event.type === "playerDied") {
-      lines.push(describeDeath(event, playerNames));
-    } else if (event.type === "voteResolved") {
+  if (game.attackFailedDays.includes(game.day)) lines.push("The attack failed.");
+
+  // Graveyard is the single source for death announcements. A full-reveal
+  // compatibility `playerDied` event may also be present in the safe log, so
+  // intentionally do not render deaths from the log.
+  for (const death of game.graveyard.filter((entry) => entry.day === game.day)) {
+    lines.push(describeDeath(death, playerNames));
+  }
+
+  for (const event of publicOutcomeEventsForDay(game, game.day)) {
+    if (event.type === "voteResolved") {
       lines.push(
         event.eliminatedId
           ? `${playerLabel(playerNames, event.eliminatedId)} was voted out.`

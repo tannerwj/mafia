@@ -145,10 +145,10 @@ test("kill network mid-night, banner appears, restore, same seat + pending-actio
 
   // Erin (mafia) submits her night target before dropping — that pending
   // action must survive the reconnect.
-  await erin.getByTestId("night-target-option").filter({ hasText: "Carol" }).click();
-  await expect(erin.getByTestId("night-target-option").filter({ hasText: "Carol" })).toHaveAttribute(
-    "data-target-id",
-  );
+  const erinTarget = erin.getByTestId("night-target-option").filter({ hasText: "Carol" });
+  await erinTarget.click();
+  await expect(erinTarget).toHaveClass(/border-brass/);
+  await expect(erin.getByTestId("lock-in-button")).toBeEnabled();
 
   // Close the room socket BEFORE flipping offline — closing first lets the
   // WebSocket close handshake actually complete over a live transport
@@ -176,6 +176,16 @@ test("kill network mid-night, banner appears, restore, same seat + pending-actio
   // fix-round is about. Timeout raised well past that fallback's ceiling.
   await expect(erin.getByTestId("connection-banner")).toBeVisible({ timeout: 50_000 });
 
+  // A consequential tap while the socket is down must be acknowledged as
+  // unsent. It must not optimistically lock the mafia action or silently
+  // disappear. Repeated taps during this same disconnect share one message.
+  await erin.getByTestId("lock-in-button").click();
+  await erin.getByTestId("lock-in-button").click();
+  const blockedToast = erin.getByText("Connection lost. Reconnect, then try again.", { exact: true });
+  await expect(blockedToast).toHaveCount(1);
+  await expect(blockedToast).toBeVisible();
+  await expect(erin.getByTestId("lock-in-button")).toHaveText("Lock in");
+
   await erinCtx.setOffline(false);
   // Recovery goes through `RoomConnection`'s exponential-backoff retry
   // (`BACKOFF_BASE_MS` 500 up to `BACKOFF_CAP_MS` 15s, full jitter). Traced
@@ -195,6 +205,7 @@ test("kill network mid-night, banner appears, restore, same seat + pending-actio
   await expect(
     erin.getByTestId("night-target-option").filter({ hasText: "Carol" }),
   ).toHaveClass(/border-brass/);
+  await expect(erin.getByTestId("lock-in-button")).toHaveText("Lock in");
   await expect(erin.getByTestId("mafia-consensus")).toBeVisible();
 
   await hostCtx.close();

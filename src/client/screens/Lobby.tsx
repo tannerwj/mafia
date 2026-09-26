@@ -64,7 +64,7 @@ export default function Lobby({
           <p className="text-[0.65rem] uppercase tracking-[0.3em] text-smoke">
             Assembling subjects
           </p>
-          <h1 className="file-heading text-2xl text-blood">The Roster</h1>
+          <h1 className="file-heading text-2xl text-blood-hi">The Roster</h1>
         </div>
         <HelpButton />
       </div>
@@ -122,7 +122,7 @@ export default function Lobby({
                   type="button"
                   data-testid="kick-button"
                   onClick={() => onKick(p.id)}
-                  className="min-h-11 rounded-sm border border-blood px-2 py-1 text-[0.65rem] uppercase tracking-[0.1em] text-blood"
+                  className="min-h-11 rounded-sm border border-blood px-2 py-1 text-[0.65rem] uppercase tracking-[0.1em] text-blood-hi"
                 >
                   Dismiss
                 </button>

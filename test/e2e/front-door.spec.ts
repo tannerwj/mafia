@@ -46,6 +46,35 @@ test.describe("D1: landing explainer", () => {
     await page.getByTestId("landing-instructions-close").click();
     await expect(page.getByTestId("landing-instructions-modal")).toBeHidden();
   });
+
+  test("the landing briefing is keyboard-trapped and returns focus on Escape", async ({ page }) => {
+    await page.goto("/");
+    const opener = page.getByTestId("landing-how-it-works-link");
+    const dialog = page.getByTestId("landing-instructions-modal");
+
+    await opener.scrollIntoViewIfNeeded();
+    await opener.focus();
+    await page.keyboard.press("Enter");
+    await expect(dialog).toBeVisible();
+
+    await expect
+      .poll(() => dialog.evaluate((node) => node.contains(node.ownerDocument.activeElement)))
+      .toBe(true);
+
+    await page.keyboard.press("Tab");
+    await expect
+      .poll(() => dialog.evaluate((node) => node.contains(node.ownerDocument.activeElement)))
+      .toBe(true);
+
+    await page.keyboard.press("Shift+Tab");
+    await expect
+      .poll(() => dialog.evaluate((node) => node.contains(node.ownerDocument.activeElement)))
+      .toBe(true);
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(opener).toBeFocused();
+  });
 });
 
 test.describe("D4: QR join", () => {

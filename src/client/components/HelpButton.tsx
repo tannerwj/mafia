@@ -14,10 +14,10 @@ export default function HelpButton({ className }: { className?: string }) {
         data-testid="help-button"
         aria-label="How to play"
         onClick={() => setOpen(true)}
-        className={
+        className={`${
           className ??
           "flex h-11 w-11 items-center justify-center rounded-sm border border-frame bg-ink-2 text-lg text-paper"
-        }
+        } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass-hi focus-visible:ring-offset-2 focus-visible:ring-offset-ink`}
       >
         ?
       </button>

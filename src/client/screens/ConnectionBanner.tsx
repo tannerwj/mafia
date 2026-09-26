@@ -76,6 +76,8 @@ export default function ConnectionBanner({
     <div
       data-testid="connection-banner"
       data-status={status}
+      role="status"
+      aria-live="polite"
       className={`safe-pt w-full px-4 py-2 text-center text-xs font-bold uppercase tracking-[0.15em] transition-colors ${
         isBack ? "bg-brass text-ink" : "bg-ink-3 text-paper"
       }`}

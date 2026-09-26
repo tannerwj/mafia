@@ -19,7 +19,7 @@ export default function IdentityChooser({
         <p className="text-[0.65rem] uppercase tracking-[0.3em] text-smoke">
           Two files on this device
         </p>
-        <h1 className="file-heading text-2xl text-blood">Enter this case as…</h1>
+        <h1 className="file-heading text-2xl text-blood-hi">Enter this case as…</h1>
         <p className="text-sm text-smoke">
           // credentials found for both the investigator and a subject.
         </p>

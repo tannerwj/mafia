@@ -33,6 +33,7 @@ function baseView(overrides: Partial<ClientGameView> = {}): ClientGameView {
       { id: "p3", alive: true, absent: false },
     ],
     log: [],
+    attackFailedDays: [],
     winners: null,
     rolesRemaining: [{ roleId: "villager", count: 2 }],
     graveyard: [{ playerId: "p2", day: 1, cause: "night", roleId: "mafia", alignment: "evil" }],
@@ -94,12 +95,19 @@ describe("Spec 15: buildStoryFacts — structural guard + leak contract", () => 
   test("report beat (morning-report) facts include graveyard/attackFailed derived from the view", () => {
     const view = baseView({
       phase: "dawn",
-      log: [{ type: "attackAttempted", day: 2, actorId: "p1", targetId: "p2", attack: "basic", defense: "none", outcome: "landed" }],
+      attackFailedDays: [],
     });
     const facts = buildStoryFacts(view, "morning-report", nameOf) as Extract<StoryFacts, { kind: "report" }>;
     expect(facts.kind).toBe("report");
     expect(facts.deaths).toEqual([{ name: "Bob", cause: "night", roleWord: "mafia" }]);
     expect(facts.attackFailed).toBe(false);
+  });
+
+  test("report beat reads only the current day from the unique failed-attack days", () => {
+    const current = buildStoryFacts(baseView({ phase: "dawn", day: 2, attackFailedDays: [1, 2, 2] }), "morning-report", nameOf) as Extract<StoryFacts, { kind: "report" }>;
+    const earlier = buildStoryFacts(baseView({ phase: "dawn", day: 2, attackFailedDays: [1] }), "morning-report", nameOf) as Extract<StoryFacts, { kind: "report" }>;
+    expect(current.attackFailed).toBe(true);
+    expect(earlier.attackFailed).toBe(false);
   });
 
   test("report beat never includes a `roster` entry for a player id not on the view (no identity source beyond the projection)", () => {

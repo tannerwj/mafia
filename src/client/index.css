@@ -32,6 +32,10 @@
    * ONLY. It is stamp ink, never a general accent. `blood` name kept for the
    * same zero-churn reason as `bone`/`smoke`. */
   --color-blood: #a01e1e;
+  /* Readable blood text on the dark ink surfaces. Keep the darker blood token
+   * for filled controls and borders; this foreground is bright enough for
+   * normal-size text while retaining the same noir red family. */
+  --color-blood-hi: #ef7676;
 
   /* Evidence-tab accent — a muted olive for file tabs and the "selected /
    * marked" affordance. Replaces the old `brass` gold as the primary
@@ -78,6 +82,14 @@ body {
   font-family: var(--font-sans);
   /* No horizontal scroll, ever (D2 pin). */
   overflow-x: hidden;
+}
+
+/* Hand-written controls do not inherit the shared Button primitive's focus
+ * ring. Keep keyboard focus visible across those controls as well. */
+button:focus-visible,
+[role="switch"]:focus-visible {
+  outline: 2px solid var(--color-brass-hi);
+  outline-offset: 2px;
 }
 
 #root {
@@ -221,7 +233,7 @@ body {
 }
 
 .stamp-red {
-  color: var(--color-blood);
+  color: var(--color-blood-hi);
 }
 .stamp-olive {
   color: var(--color-brass-hi);

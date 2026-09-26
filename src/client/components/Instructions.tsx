@@ -31,11 +31,13 @@ export function InstructionsContent() {
 
       <Section title="Day and night">
         <p>
-          Each round is a night followed by a day. At night, players with a
-          night action (Mafia, Detective, Angel) act in secret; everyone else
-          sleeps. At dawn, the night's events are revealed. By day, the whole
-          village discusses and votes on who to eliminate; the result is
-          revealed at dusk, and the cycle repeats.
+          Each round is a night followed by a day. At night, every living
+          player privately picks one living subject and confirms the choice.
+          Mafia, Detective, and Angel choices have real effects; everyone else
+          makes an inert “Keep watch” decoy pick so no one can tell who has
+          power from who is tapping. At dawn, the night's events are revealed.
+          By day, the whole village discusses and votes on who to eliminate;
+          the result is revealed at dusk, and the cycle repeats.
         </p>
       </Section>
 
@@ -96,7 +98,7 @@ export default function InstructionsModal({
         >
           <div className="mb-4 flex items-center justify-between">
             <Dialog.Title asChild>
-              <h2 className="file-heading text-xl text-blood">Case briefing</h2>
+              <h2 className="file-heading text-xl text-blood-hi">Case briefing</h2>
             </Dialog.Title>
             <Dialog.Close asChild>
               <button

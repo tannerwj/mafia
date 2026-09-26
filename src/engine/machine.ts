@@ -410,6 +410,11 @@ function resolveVote(state: GameState, now?: number): EngineResult {
       } else if (state.ruleset.tiePolicy === "random") {
         const next = nextRandom(state.rngState);
         state.rngState = next.state;
+        playerTies.sort((a, b) => {
+          const aSeat = state.players.find((player) => player.id === a)?.seat ?? 9999;
+          const bSeat = state.players.find((player) => player.id === b)?.seat ?? 9999;
+          return aSeat - bSeat || a.localeCompare(b);
+        });
         const pick: string | null = playerTies[Math.floor(next.value * playerTies.length)] ?? null;
         eliminated = pick;
         reason = "random";

@@ -58,7 +58,7 @@ export function RoleCard({
           ) : (
             <ul className="flex flex-col gap-1">
               {mafiaRoster.map((id) => (
-                <li key={id} className="text-blood">
+                <li key={id} className="text-blood-hi">
                   {playerNames?.get(id) ?? id}
                 </li>
               ))}
@@ -75,7 +75,7 @@ export function RoleCard({
             {investigationResults.map((r) => (
               <li key={`${r.day}-${r.targetId}`}>
                 Night {r.day}: {playerNames?.get(r.targetId) ?? r.targetId} —{" "}
-                <span className={r.isMafia ? "text-blood" : "text-paper"}>
+                <span className={r.isMafia ? "text-blood-hi" : "text-paper"}>
                   {r.isMafia ? "Mafia" : "Not mafia"}
                 </span>
               </li>

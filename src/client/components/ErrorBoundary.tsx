@@ -45,7 +45,7 @@ export class ErrorBoundary extends Component<Props, State> {
     const roomCode = roomCodeFromPathname(window.location.pathname);
     return (
       <div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-ink p-6 text-center">
-        <h1 className="file-heading text-2xl text-blood">THE CASE FILE JAMMED</h1>
+        <h1 className="file-heading text-2xl text-blood-hi">THE CASE FILE JAMMED</h1>
         <p className="max-w-sm text-sm text-paper/70">
           Something tore in the paperwork. The desk sergeant has been notified.
         </p>

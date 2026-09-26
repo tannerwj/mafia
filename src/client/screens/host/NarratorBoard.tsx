@@ -133,7 +133,7 @@ export default function NarratorBoard({
             </ul>
           )}
           {nightStragglers.length > 0 && (
-            <p data-testid="board-night-stragglers" className="mt-1 text-xs text-blood">
+            <p data-testid="board-night-stragglers" className="mt-1 text-xs text-blood-hi">
               Not locked: {nightStragglers.map(name).join(", ")}
             </p>
           )}
@@ -163,7 +163,7 @@ export default function NarratorBoard({
             </ul>
           )}
           {dayStragglers.length > 0 && (
-            <p data-testid="board-day-stragglers" className="mt-1 text-xs text-blood">
+            <p data-testid="board-day-stragglers" className="mt-1 text-xs text-blood-hi">
               Not locked: {dayStragglers.map(name).join(", ")}
             </p>
           )}

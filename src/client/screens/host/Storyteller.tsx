@@ -198,7 +198,7 @@ export function StorytellerPanel({ story, legalBeat, phaseGen }: { story: StoryS
             )}
             {draft.status === "error" && (
               <>
-                <p data-testid="storyteller-draft-error" className="text-sm text-blood">
+                <p data-testid="storyteller-draft-error" className="text-sm text-blood-hi">
                   {draft.error}
                 </p>
                 {legalBeat && (

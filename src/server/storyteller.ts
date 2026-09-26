@@ -101,7 +101,10 @@ export function buildStoryFacts(view: ClientGameView, beat: BeatId, nameOf: Name
     const roleWord = g.roleId ?? g.alignment;
     return { name: nameOf(g.playerId), cause: g.cause, ...(roleWord ? { roleWord } : {}) };
   });
-  const attackFailed = view.log.some((e) => e.type === "attackAttempted" && e.outcome === "failed");
+  // Public projections carry only the reduced aggregate. The current day's
+  // flag preserves the morning wording without ever handing the storyteller
+  // a killer, target, or attack/defense tier.
+  const attackFailed = view.attackFailedDays.includes(view.day);
   const voteResolved = [...view.log].reverse().find((e) => e.type === "voteResolved") as
     | Extract<ClientGameView["log"][number], { type: "voteResolved" }>
     | undefined;
@@ -109,7 +112,7 @@ export function buildStoryFacts(view: ClientGameView, beat: BeatId, nameOf: Name
     ? { eliminatedName: voteResolved.eliminatedId ? nameOf(voteResolved.eliminatedId) : null, reason: voteResolved.reason }
     : undefined;
   // Tallies are ALREADY visibility-gated by `projectFor` itself (only present
-  // on `view.votes` when `votingVisibility === "realtime"` or god/dusk/ended)
+  // on `view.votes` when `votingVisibility === "realtime"` or for the host)
   // — this function just forwards whatever `view.votes` happens to contain,
   // never re-deriving or loosening that gate.
   const tallies = view.votes?.map((v) => ({ voterName: nameOf(v.playerId), targetName: v.target === "no_murder" ? "no one" : nameOf(v.target) }));

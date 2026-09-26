@@ -78,7 +78,7 @@ export function PlayerTable({
             data-connected={row.connected}
             className="flex min-h-11 flex-wrap items-center justify-between gap-2 rounded-sm border border-frame bg-ink-2 px-4 py-2"
           >
-            <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
               <span
                 aria-hidden
                 data-testid="host-presence-dot"
@@ -87,7 +87,7 @@ export function PlayerTable({
                 }`}
                 title={row.connected ? "connected" : "disconnected"}
               />
-              <span className={`truncate ${row.alive ? "text-paper" : "text-smoke line-through"}`}>
+              <span className={`min-w-0 break-words sm:truncate ${row.alive ? "text-paper" : "text-smoke line-through"}`}>
                 {row.name}
               </span>
               {inGame && copy && (
@@ -131,7 +131,7 @@ export function PlayerTable({
                   type="button"
                   data-testid="kick-button"
                   onClick={() => onKick(row.id)}
-                  className="min-h-11 rounded-sm border border-blood px-2 py-1 text-[0.65rem] uppercase tracking-[0.1em] text-blood"
+                  className="min-h-11 rounded-sm border border-blood px-2 py-1 text-[0.65rem] uppercase tracking-[0.1em] text-blood-hi"
                 >
                   Dismiss
                 </button>

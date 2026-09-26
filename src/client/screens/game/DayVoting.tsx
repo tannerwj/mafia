@@ -47,7 +47,7 @@ export default function DayVoting({
     return game.votes.filter((v) => v.target === targetId).length;
   }
 
-  const myVoteName = myVote === "no_murder" ? "No case tonight" : myVote ? (playerNames.get(myVote) ?? myVote) : null;
+  const myVoteName = myVote === "no_murder" ? "No murder this round" : myVote ? (playerNames.get(myVote) ?? myVote) : null;
 
   return (
     <div className="animate-rise flex flex-col gap-6 px-4 py-6" data-testid="day-voting">
@@ -71,7 +71,7 @@ export default function DayVoting({
           {you.investigationResults.map((r) => (
             <p key={`${r.day}-${r.targetId}`}>
               Night {r.day}: {playerNames.get(r.targetId) ?? r.targetId} —{" "}
-              <span className={r.isMafia ? "text-blood" : "text-paper"}>
+              <span className={r.isMafia ? "text-blood-hi" : "text-paper"}>
                 {r.isMafia ? "Mafia" : "Not mafia"}
               </span>
             </p>
@@ -92,7 +92,7 @@ export default function DayVoting({
           ) : (
             <ul className="flex flex-col gap-1">
               {you.mafiaRoster.map((id) => (
-                <li key={id} className="text-blood">
+                <li key={id} className="text-blood-hi">
                   {playerNames.get(id) ?? id}
                 </li>
               ))}
@@ -129,7 +129,7 @@ export default function DayVoting({
                 >
                   <span className="flex items-center gap-2">
                     {mine && (
-                      <span aria-hidden className="text-[0.6rem] uppercase tracking-[0.15em] text-blood">
+                      <span aria-hidden className="text-[0.6rem] uppercase tracking-[0.15em] text-blood-hi">
                         ✗
                       </span>
                     )}
@@ -237,7 +237,7 @@ function NoMurderCard({ mine, locked, onVote }: { mine: boolean; locked: boolean
         mine ? "border-brass text-brass-hi" : "border-frame text-paper"
       }`}
     >
-      No case tonight
+      No murder this round
     </button>
   );
 }

@@ -121,9 +121,13 @@ export class RoomConnection {
     this.auth = auth;
   }
 
-  send(msg: ClientMessage): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+  send(msg: ClientMessage): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    try {
       this.ws.send(JSON.stringify(msg));
+      return true;
+    } catch {
+      return false;
     }
   }
 

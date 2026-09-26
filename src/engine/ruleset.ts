@@ -31,6 +31,10 @@ export interface ValidationResult {
   warnings: { code: string; message: string }[];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export const HOUSE_RULES: Ruleset = {
   roles: {
     mafia: "auto",
@@ -110,16 +114,80 @@ export function materializeRoleCounts(ruleset: Ruleset, playerCount: number): Re
 export function validateRuleset(ruleset: Ruleset, playerCount: number): ValidationResult {
   const errors: ValidationResult["errors"] = [];
   const warnings: ValidationResult["warnings"] = [];
-  const counts = materializeRoleCounts(ruleset, playerCount);
+  const raw = ruleset as unknown;
+  if (!isRecord(raw)) {
+    return { errors: [{ code: "ruleset_shape_invalid", message: "Ruleset must be an object." }], warnings };
+  }
+
+  const rawRoles = raw.roles;
+  const rawTimers = raw.timers;
+  let canMaterialize = true;
+  if (!isRecord(rawRoles)) {
+    errors.push({ code: "ruleset_shape_invalid", message: "Ruleset roles must be an object." });
+    canMaterialize = false;
+  }
+  if (!isRecord(rawTimers)) {
+    errors.push({ code: "ruleset_shape_invalid", message: "Ruleset timers must be an object." });
+    canMaterialize = false;
+  }
+
+  const requiredFields: [string, (value: unknown) => boolean][] = [
+    ["mafiaCountFormula", (value) => value === "sqrt" || value === "quarter"],
+    ["firstNightKill", (value) => typeof value === "boolean"],
+    ["tiePolicy", (value) => value === "runoff-then-peace" || value === "no-murder" || value === "random" || value === "kill-all"],
+    ["dayVoteThreshold", (value) => value === "plurality" || value === "majority"],
+    ["noMurderOption", (value) => typeof value === "boolean"],
+    ["mafiaConsensus", (value) => value === "unanimous" || value === "majority" || value === "designated"],
+    ["revealOnDeath", (value) => value === "full" || value === "alignment" || value === "none"],
+    ["parityRule", (value) => value === "immediate" || value === "elimination"],
+    ["votingVisibility", (value) => value === "hidden" || value === "realtime"],
+    ["scenePhases", (value) => typeof value === "boolean"],
+    ["dawnDuskBeatMs", (value) => typeof value === "number" && Number.isFinite(value)],
+  ];
+  for (const [name, isValid] of requiredFields) {
+    if (!isValid(raw[name])) {
+      errors.push({ code: "ruleset_shape_invalid", message: `Ruleset field ${name} is invalid.` });
+      canMaterialize = false;
+    }
+  }
+
+  if (isRecord(rawRoles)) {
+    for (const [roleId, count] of Object.entries(rawRoles)) {
+      if (
+        count !== "auto" &&
+        !(typeof count === "number" && Number.isFinite(count) && Number.isInteger(count) && count >= 0)
+      ) {
+        errors.push({
+          code: "role_count_invalid",
+          message: `Role count for ${roleId} must be a finite non-negative integer or "auto".`,
+        });
+        canMaterialize = false;
+      }
+    }
+  }
+
+  if (isRecord(rawTimers)) {
+    for (const [name, seconds] of Object.entries(rawTimers)) {
+      if (seconds === undefined) continue;
+      if (typeof seconds !== "number" || !Number.isFinite(seconds)) {
+        errors.push({ code: "timer_invalid", message: `${name} timer must be a finite number.` });
+        canMaterialize = false;
+      } else if (seconds < 5) {
+        errors.push({ code: "timer_floor", message: `${name} timer must be at least 5 seconds.` });
+      }
+    }
+  }
+
+  if (!canMaterialize) return { errors, warnings };
+
+  const typedRuleset = raw as unknown as Ruleset;
+  const counts = materializeRoleCounts(typedRuleset, playerCount);
   const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
   if (total !== playerCount) errors.push({ code: "role_count_mismatch", message: "Role counts must equal player count." });
   if ((counts.mafia ?? 0) < 1) errors.push({ code: "mafia_required", message: "At least one mafia role is required." });
-  if (ruleset.tiePolicy === "runoff-then-peace" && !ruleset.noMurderOption) {
+  if (typedRuleset.tiePolicy === "runoff-then-peace" && !typedRuleset.noMurderOption) {
     errors.push({ code: "runoff_requires_no_murder", message: "Runoff house policy requires the no-murder option." });
   }
-  for (const [name, seconds] of Object.entries(ruleset.timers)) {
-    if (seconds !== undefined && seconds < 5) errors.push({ code: "timer_floor", message: `${name} timer must be at least 5 seconds.` });
-  }
-  if (Object.keys(ruleset.timers).length === 0) warnings.push({ code: "untimed", message: "All game phases are untimed." });
+  if (Object.keys(typedRuleset.timers).length === 0) warnings.push({ code: "untimed", message: "All game phases are untimed." });
   return { errors, warnings };
 }

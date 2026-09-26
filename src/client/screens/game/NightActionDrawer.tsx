@@ -59,7 +59,7 @@ function TargetList({
             </span>
             <span className="flex-1">{c.name}</span>
             {selected && (
-              <span aria-hidden className="text-[0.6rem] uppercase tracking-[0.15em] text-blood">
+              <span aria-hidden className="text-[0.6rem] uppercase tracking-[0.15em] text-blood-hi">
                 marked
               </span>
             )}
@@ -102,7 +102,7 @@ function MafiaRoster({
       ) : (
         <ul className="flex flex-col gap-1">
           {mafiaRoster.map((id) => (
-            <li key={id} className="text-blood">
+            <li key={id} className="text-blood-hi">
               {playerNames.get(id) ?? id}
             </li>
           ))}

@@ -25,12 +25,12 @@ const badgeVariants = cva(
         // Alignment tints, matching hostView.alignmentTint's palette
         // (town=paper, mafia=stamp-red, neutral=olive).
         "role-town": "border-frame bg-ink-3 text-paper",
-        "role-mafia": "border-blood/60 bg-blood/15 text-blood",
+        "role-mafia": "border-blood/60 bg-blood/15 text-blood-hi",
         "role-neutral": "border-brass/60 bg-brass/15 text-brass-hi",
         // Status labels.
         active: "border-brass/60 bg-brass/15 text-brass-hi",
         muted: "border-frame bg-transparent text-smoke",
-        danger: "border-blood/60 bg-blood/15 text-blood",
+        danger: "border-blood/60 bg-blood/15 text-blood-hi",
       },
     },
     defaultVariants: {

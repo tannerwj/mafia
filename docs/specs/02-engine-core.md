@@ -213,7 +213,8 @@ Lobby/identity (Spec 01 owns everything before `startGame`).
   non-absent* mafia submits — the designation moves if they die or are
   marked absent)). **Consensus timeout**: on `timerExpired`/`forceAdvance`
   with `unanimous`/`majority` unconverged, the kill resolves as plurality
-  among submitted mafia votes (ties by seat order); zero submitted votes ⇒
+  among **locked** mafia votes (ties by lowest supporting killer seat);
+  zero locked votes ⇒
   no kill. This is pinned — the generic "no action" default is for
   individual actions and must NOT be applied to the factional kill (it would
   silently turn unanimous mode into no-kill-most-nights).
@@ -224,8 +225,8 @@ Lobby/identity (Spec 01 owns everything before `startGame`).
   actions). The factional kill resolves by ONE uniform rule on every advance
   path — natural zero-pending advance, `timerExpired`, or `forceAdvance`
   alike: converged per the consensus mode → that target; unconverged →
-  plurality among submitted mafia votes (seat-order tie-break); zero
-  submitted → no kill. So: host marks the ghosting mafia absent → remaining
+  plurality among **locked** mafia votes (lowest supporting killer-seat
+  tie-break); zero locked → no kill. So: host marks the ghosting mafia absent → remaining
   mafia (already converged) → night resolves. Only-mafia-absent → no kill.
   Angel may self-protect. Detective learns `isMafia` boolean
   (minion reads **not mafia** — they're not a mafia-role player). Minion:

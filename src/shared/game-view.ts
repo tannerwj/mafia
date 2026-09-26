@@ -151,6 +151,9 @@ export interface ClientGameView {
   voted?: PlayerId[];
   runoffCandidates?: PlayerId[];
   log: GameEvent[];
+  /** Resolved failed attacks, reduced to day numbers so public morning
+   * announcements never need actor/target/defense details. Sorted and unique. */
+  attackFailedDays: number[];
   winners: string[] | null;
   /** Spec 12 Feature 3: alive-role counts, AGGREGATE-ONLY, present for EVERY
    * viewer at all phases (Tanner's transparency choice — full counts always).

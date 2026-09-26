@@ -34,7 +34,7 @@ export default function HostGameEnd({ room, game }: { room: ClientRoomState; gam
           <p className="text-[0.6rem] uppercase tracking-[0.3em] text-smoke">
             Lead investigator
           </p>
-          <h1 className="file-heading text-xl text-blood">The Case Board</h1>
+          <h1 className="file-heading text-xl text-blood-hi">The Case Board</h1>
         </div>
         <PrivacyChip />
       </div>

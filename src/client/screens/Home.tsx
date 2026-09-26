@@ -1,4 +1,5 @@
 import { useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import { InstructionsContent } from "../components/Instructions";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
@@ -20,46 +21,52 @@ function HowToPlayFooterLink() {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <p className="text-center text-[0.7rem] text-smoke">
-        Playing at the table already?{" "}
-        <button
-          type="button"
-          data-testid="landing-how-it-works-link"
-          onClick={() => setOpen(true)}
-          className="underline decoration-dotted underline-offset-4 hover:text-paper"
-        >
-          Read the full case briefing
-        </button>
-        .
-      </p>
-      {open && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          data-testid="landing-instructions-modal"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-ink/90 p-4"
-          onClick={() => setOpen(false)}
-        >
-          <div
-            className="file-frame animate-rise flex max-h-[85dvh] w-full max-w-md flex-col overflow-y-auto rounded-md bg-ink-2 p-6"
-            onClick={(e) => e.stopPropagation()}
+      <Dialog.Root open={open} onOpenChange={setOpen}>
+        <p className="text-center text-[0.7rem] text-smoke">
+          Playing at the table already?{" "}
+          <Dialog.Trigger asChild>
+            <button
+              type="button"
+              data-testid="landing-how-it-works-link"
+              className="inline-flex min-h-11 items-center rounded-sm px-1 underline decoration-dotted underline-offset-4 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass-hi focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+            >
+              Read the full case briefing
+            </button>
+          </Dialog.Trigger>
+          .
+        </p>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-ink/90" />
+          <Dialog.Content
+            data-testid="landing-instructions-modal"
+            className="file-frame animate-rise fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col rounded-md bg-ink-2 p-6 shadow-card"
           >
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="file-heading text-xl text-blood">Case briefing</h2>
-              <button
-                type="button"
-                data-testid="landing-instructions-close"
-                aria-label="Close instructions"
-                onClick={() => setOpen(false)}
-                className="flex h-11 w-11 items-center justify-center rounded-sm border border-frame text-paper"
-              >
-                ✕
-              </button>
+              <Dialog.Title asChild>
+                <h2 className="file-heading text-xl text-blood-hi">Case briefing</h2>
+              </Dialog.Title>
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  data-testid="landing-instructions-close"
+                  aria-label="Close instructions"
+                  className="flex h-11 w-11 items-center justify-center rounded-sm border border-frame text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass-hi focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+                >
+                  ✕
+                </button>
+              </Dialog.Close>
             </div>
-            <InstructionsContent />
-          </div>
-        </div>
-      )}
+            <Dialog.Description asChild>
+              <span className="sr-only">
+                Objective, day and night loop, voting rules, and every role&apos;s ability.
+              </span>
+            </Dialog.Description>
+            <div className="overflow-y-auto">
+              <InstructionsContent />
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </>
   );
 }
@@ -94,7 +101,7 @@ function LandingExplainer() {
         <ol className="flex flex-col gap-3">
           {HOW_IT_RUNS.map((step, i) => (
             <li key={i} className="flex gap-3 rounded-sm border border-frame bg-ink-2 p-3">
-              <span className="file-heading shrink-0 text-xl text-blood">{i + 1}</span>
+              <span className="file-heading shrink-0 text-xl text-blood-hi">{i + 1}</span>
               <span className="text-sm text-paper/80">{step}</span>
             </li>
           ))}
@@ -221,7 +228,7 @@ export default function Home() {
         <p className="text-[0.7rem] uppercase tracking-[0.4em] text-smoke">
           Case File No. 187
         </p>
-        <h1 className="file-heading text-7xl leading-none text-blood">MAFIA</h1>
+        <h1 className="file-heading text-7xl leading-none text-blood-hi">MAFIA</h1>
         <span className="stamp stamp-red text-[0.6rem]">Confidential</span>
         <p className="mt-1 text-xs uppercase tracking-[0.2em] text-smoke">
           a silent game for a loud table
@@ -276,7 +283,7 @@ export default function Home() {
       </form>
 
       {error && (
-        <p data-testid="home-error" className="text-sm text-blood">
+        <p data-testid="home-error" role="alert" className="text-sm text-blood-hi">
           {error}
         </p>
       )}

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { SeatBackupEntry } from "../net/identity";
 import { Button } from "../components/ui/button";
+import HelpButton from "../components/HelpButton";
 
 export default function SeatPicker({
   backups,
@@ -28,11 +29,14 @@ export default function SeatPicker({
 
   return (
     <main className="page-p relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-8 bg-ink text-paper">
-      <div className="animate-rise flex flex-col items-center gap-2 text-center">
-        <p className="text-[0.65rem] uppercase tracking-[0.3em] text-smoke">
-          Report for questioning
-        </p>
-        <h1 className="file-heading text-3xl text-blood">Sign the register</h1>
+      <div className="flex w-full items-start justify-between gap-4">
+        <div className="animate-rise flex flex-col items-center gap-2 text-center">
+          <p className="text-[0.65rem] uppercase tracking-[0.3em] text-smoke">
+            Report for questioning
+          </p>
+          <h1 className="file-heading text-3xl text-blood-hi">Sign the register</h1>
+        </div>
+        <HelpButton />
       </div>
 
       {backups.length > 0 && !showJoinNew && (
@@ -64,7 +68,14 @@ export default function SeatPicker({
           onSubmit={submitJoinNew}
           className="flex w-full max-w-xs flex-col gap-3"
         >
+          <label
+            htmlFor="join-name-input"
+            className="text-xs uppercase tracking-[0.2em] text-smoke"
+          >
+            Subject name
+          </label>
           <input
+            id="join-name-input"
             data-testid="join-name-input"
             value={name}
             onChange={(e) => {
@@ -74,13 +85,15 @@ export default function SeatPicker({
             maxLength={20}
             placeholder="Subject name"
             autoFocus
-            className="h-12 rounded-md border border-frame bg-ink-2 px-3 text-paper placeholder:text-smoke/60 focus:border-brass focus:outline-none"
+            aria-invalid={nameError ? "true" : undefined}
+            aria-describedby={nameError ? "join-name-error" : undefined}
+            className="h-12 rounded-md border border-frame bg-ink-2 px-3 text-paper placeholder:text-smoke/60 focus:border-brass focus:outline-none focus-visible:ring-2 focus-visible:ring-brass-hi focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
           />
           <Button type="submit" variant="brass" data-testid="join-name-submit" className="w-full">
             Join
           </Button>
           {nameError && (
-            <p data-testid="join-name-error" className="text-center text-sm text-blood">
+            <p id="join-name-error" data-testid="join-name-error" role="alert" className="text-center text-sm text-blood-hi">
               {nameError}
             </p>
           )}

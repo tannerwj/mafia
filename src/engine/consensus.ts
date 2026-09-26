@@ -49,8 +49,31 @@ export interface ConsensusResult {
   target: { actorId: string; targetId: string } | null;
 }
 
-function seatOf(killers: PlayerState[], playerId: string): number {
-  return killers.find((p) => p.id === playerId)?.seat ?? 9999;
+function lowestSupportingKiller(
+  votes: MafiaVote[],
+  killers: PlayerState[],
+  targetId: string,
+  lockedOnly: boolean,
+): PlayerState | undefined {
+  const killerIds = new Set(killers.map((killer) => killer.id));
+  return votes
+    .filter((vote) => vote.targetId === targetId && killerIds.has(vote.playerId) && qualifies(vote, lockedOnly))
+    .map((vote) => killers.find((killer) => killer.id === vote.playerId)!)
+    .sort((a, b) => a.seat - b.seat)[0];
+}
+
+function compareTargetsBySupportingSeat(
+  votes: MafiaVote[],
+  killers: PlayerState[],
+  lockedOnly: boolean,
+): (a: [string, number], b: [string, number]) => number {
+  return (a, b) => {
+    const countDifference = b[1] - a[1];
+    if (countDifference !== 0) return countDifference;
+    const aSeat = lowestSupportingKiller(votes, killers, a[0], lockedOnly)?.seat ?? 9999;
+    const bSeat = lowestSupportingKiller(votes, killers, b[0], lockedOnly)?.seat ?? 9999;
+    return aSeat - bSeat || a[0].localeCompare(b[0]);
+  };
 }
 
 function designatedKiller(killers: PlayerState[]): PlayerState | undefined {
@@ -84,10 +107,11 @@ export function resolveConsensus(votes: MafiaVote[], killers: PlayerState[], mod
   const relevantVotes = votes.filter((v) => killers.some((k) => k.id === v.playerId) && qualifies(v, opts.lockedOnly));
   const counts = new Map<string, number>();
   for (const vote of relevantVotes) counts.set(vote.targetId!, (counts.get(vote.targetId!) ?? 0) + 1);
-  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1] || seatOf(killers, a[0]) - seatOf(killers, b[0]));
+  const sorted = [...counts.entries()].sort(compareTargetsBySupportingSeat(relevantVotes, killers, opts.lockedOnly));
   const top = sorted[0]!;
   const converged = mode === "unanimous" ? top[1] === killers.length : true;
-  const target = converged ? { actorId: relevantVotes.find((v) => v.targetId === top[0])!.playerId, targetId: top[0] } : null;
+  const actor = lowestSupportingKiller(relevantVotes, killers, top[0], opts.lockedOnly);
+  const target = converged && actor ? { actorId: actor.id, targetId: top[0] } : null;
 
   return { ready, converged, target };
 }
@@ -107,7 +131,8 @@ export function resolveLockedPlurality(votes: MafiaVote[], killers: PlayerState[
   if (lockedVotes.length === 0) return null;
   const counts = new Map<string, number>();
   for (const vote of lockedVotes) counts.set(vote.targetId!, (counts.get(vote.targetId!) ?? 0) + 1);
-  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1] || seatOf(killers, a[0]) - seatOf(killers, b[0]));
+  const sorted = [...counts.entries()].sort(compareTargetsBySupportingSeat(lockedVotes, killers, true));
   const top = sorted[0]!;
-  return { actorId: lockedVotes.find((v) => v.targetId === top[0])!.playerId, targetId: top[0] };
+  const actor = lowestSupportingKiller(lockedVotes, killers, top[0], true)!;
+  return { actorId: actor.id, targetId: top[0] };
 }

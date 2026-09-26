@@ -57,6 +57,8 @@ const STORY_ERROR_COPY: Record<string, string> = {
   generation_failed: "The muse is silent — try again.",
 };
 
+const SEND_BLOCKED_COPY = "Connection lost. Reconnect, then try again.";
+
 /** Spec 15. A not-yet-committed draft, held ONLY in client state (§Memory:
  * "pending drafts are ephemeral by design") — a reload loses it; the host
  * simply re-spins. `status` tracks the round trip; `error` is set instead of
@@ -80,6 +82,9 @@ interface GameStoreState {
    * for any game-logic decision. `null` until the first phase is known. */
   previousPhase: Phase | "lobby" | null;
   lastError: ErrorMessage | null;
+  /** Prevents repeated consequential taps during one disconnect from
+   * producing a toast storm. Cleared as soon as the socket welcomes again. */
+  sendBlockedToastShown: boolean;
   conn: RoomConnection | null;
   /** `serverNow - Date.now()` sampled at the moment of the most recent
    * welcome/snapshot — countdowns add this to `Date.now()` rather than
@@ -110,6 +115,7 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
   playerId: null,
   previousPhase: null,
   lastError: null,
+  sendBlockedToastShown: false,
   conn: null,
   clockOffsetMs: 0,
   storyDraft: null,
@@ -117,7 +123,13 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
   connect: (code, auth, hooks) => {
     get().conn?.close();
     const conn = new RoomConnection(code, auth, {
-      onStatusChange: (status) => set({ connection: status }),
+      onStatusChange: (status) => {
+        set(
+          status === "open"
+            ? { connection: status, sendBlockedToastShown: false }
+            : { connection: status },
+        );
+      },
       onWelcome: (info) => {
         // A fresh `join` only mints a seat token on the FIRST welcome —
         // every reconnect within this same page session must present that
@@ -203,6 +215,7 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
       playerId: null,
       previousPhase: null,
       lastError: null,
+      sendBlockedToastShown: false,
       conn: null,
       clockOffsetMs: 0,
       storyDraft: null,
@@ -210,7 +223,11 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
   },
 
   send: (msg) => {
-    get().conn?.send(msg);
+    const accepted = get().conn?.send(msg) ?? false;
+    if (!accepted && !get().sendBlockedToastShown) {
+      set({ sendBlockedToastShown: true });
+      toast(SEND_BLOCKED_COPY);
+    }
   },
 }));
 

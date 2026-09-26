@@ -15,6 +15,7 @@ import {
 } from "../shared/protocol";
 import {
   applyCommand,
+  HOUSE_ROLE_DEFS,
   HOUSE_RULES,
   projectFor,
   startGame,
@@ -771,6 +772,22 @@ export class GameRoom extends DurableObject<Env> {
         "invalid_ruleset",
         validation.errors.map((e) => e.message).join(" "),
       );
+      return;
+    }
+
+    // The production room uses the house six. Keep the engine's validator
+    // extensible for custom role packs, but reject positive unknown roles at
+    // the server boundary before startGame can call getRole and throw.
+    const unknownPositiveRoles = Object.entries(ruleset.roles)
+      .filter(
+        ([roleId, count]) =>
+          !Object.prototype.hasOwnProperty.call(HOUSE_ROLE_DEFS, roleId) &&
+          typeof count === "number" &&
+          count > 0,
+      )
+      .map(([roleId]) => roleId);
+    if (unknownPositiveRoles.length > 0) {
+      this.sendError(ws, "invalid_ruleset", `Unknown role ${unknownPositiveRoles[0]}.`);
       return;
     }
 

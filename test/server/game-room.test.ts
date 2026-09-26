@@ -4,9 +4,10 @@ import {
   runInDurableObject,
   SELF,
   evictDurableObject,
+  abortAllDurableObjects,
 } from "cloudflare:test";
-import { describe, expect, test, vi } from "vitest";
-import type { Ruleset } from "../../src/engine";
+import { afterAll, describe, expect, test, vi } from "vitest";
+import type { GameState, Ruleset } from "../../src/engine";
 import type {
   ClientMessage,
   ClientRoomState,
@@ -51,6 +52,14 @@ interface SocketQueue {
 }
 
 const queues = new WeakMap<WebSocket, SocketQueue>();
+
+// The suite deliberately exercises hibernation, alarms, and many real
+// WebSockets. Vitest's worker RPC must be drained before it tears down the
+// Miniflare isolate; otherwise an asynchronous alarm/close log can outlive
+// the last assertion and reject the test worker during teardown.
+afterAll(async () => {
+  await abortAllDurableObjects();
+});
 
 function queueFor(ws: WebSocket): SocketQueue {
   let q = queues.get(ws);
@@ -1104,6 +1113,52 @@ describe("game lifecycle: start_game authority and validation", () => {
     expect(err.code).toBe("invalid_ruleset");
   });
 
+  test("start_game with malformed ruleset shape returns invalid_ruleset without dropping the host socket", async () => {
+    const game = await setUpFivePlayerRoom();
+    sendGame(game.hostWs, {
+      type: "start_game",
+      ruleset: { ...FIVE_PLAYER_HOUSE_RULES, roles: null },
+      seed: SCRIPTED_SEED,
+    });
+
+    const err = (await nextMessageOfType(game.hostWs, "error")) as ErrorMessage;
+    expect(err.code).toBe("invalid_ruleset");
+    sendGame(game.hostWs, { type: "ping" });
+    expect((await nextMessageOfType(game.hostWs, "pong")).type).toBe("pong");
+  });
+
+  test("start_game with a positive unknown role returns invalid_ruleset without starting", async () => {
+    const game = await setUpFivePlayerRoom();
+    sendGame(game.hostWs, {
+      type: "start_game",
+      ruleset: {
+        ...FIVE_PLAYER_HOUSE_RULES,
+        roles: { ...FIVE_PLAYER_HOUSE_RULES.roles, villager: 1, bogus: 1 },
+      },
+      seed: SCRIPTED_SEED,
+    });
+
+    const err = (await nextMessageOfType(game.hostWs, "error")) as ErrorMessage;
+    expect(err.code).toBe("invalid_ruleset");
+    expect(err.message).toContain("bogus");
+    sendGame(game.hostWs, { type: "ping" });
+    expect((await nextMessageOfType(game.hostWs, "pong")).type).toBe("pong");
+  });
+
+  test("start_game with a missing required rule field returns invalid_ruleset", async () => {
+    const game = await setUpFivePlayerRoom();
+    const { parityRule: _parityRule, ...missingParityRule } = FIVE_PLAYER_HOUSE_RULES;
+    sendGame(game.hostWs, {
+      type: "start_game",
+      ruleset: missingParityRule,
+      seed: SCRIPTED_SEED,
+    });
+
+    const err = (await nextMessageOfType(game.hostWs, "error")) as ErrorMessage;
+    expect(err.code).toBe("invalid_ruleset");
+    expect(err.message).toContain("parityRule");
+  });
+
   test("join is rejected once start_game applies; seat rejoin still works", async () => {
     const game = await setUpFivePlayerRoom();
     await startScriptedGame(game);
@@ -1199,8 +1254,14 @@ describe("full scripted game over real WebSockets", () => {
 
     expect(afterNight2.detective.phase).toBe("dawn");
     expect(afterNight2.villager1.game?.players.find((p) => p.id === game.villager1.playerId)?.alive).toBe(true);
+    // A live player's log is intentionally privacy-filtered: the failed
+    // attack is summarized by day, while the host retains the raw event.
+    expect(afterNight2.detective.game?.attackFailedDays).toContain(2);
+    const hostGame = await runInDurableObject(await stubFor(game.roomCode), async (_instance, state) =>
+      state.storage.get<GameState>("game"),
+    );
     expect(
-      afterNight2.detective.game?.log.some(
+      hostGame?.log.some(
         (e) => e.type === "attackAttempted" && e.outcome === "failed" && e.targetId === game.villager1.playerId,
       ),
     ).toBe(true);

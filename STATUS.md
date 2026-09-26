@@ -506,3 +506,21 @@ history above, and `CLAUDE.md` (operating rules + "process rules learned").
 - HOTFIX DEPLOYED (07912be9): post-deploy tail shows 0 alarm_fired in
   20s (was 90/14s). Loop dead; incident closed same evening it became
   observable.
+
+## 2026-09-26 — In-person game audit and local fixes
+- Reviewed current implementation against CLAUDE.md, PLAN/design/status/runbook,
+  specs, phone-size UI, serialized WS frames, and multi-context games. Full
+  report: docs/reviews/2026-09-26-audit.md. Production probes were read-only;
+  **no deployment or production game**.
+- Critical privacy leak fixed: living snapshots formerly included raw role
+  assignments and resolved private events in `game.log`; dead snapshots could
+  expose current hidden ballots. Public/dead allowlists, aggregate failed-
+  attack bulletin, and raw-frame Playwright regression now seal that boundary.
+- Deterministic Mafia/day tie handling and malformed ruleset rejection fixed.
+  Disconnected-command feedback, first-time help, narrow host table, keyboard
+  dialog, error semantics, and red-text contrast improved without changing
+  house rules or the approved role mixes.
+- Server Vitest teardown fixed; remaining 10s close warning documented.
+  Orchestrator gates: typecheck; 200 engine + 54 client + 135 server tests;
+  53/53 Playwright E2E on port 5211 with isolated DO state; build; diff check.
+  Client JS gzip 129.15→130.19 kB. Small-table pace remains an owner decision.

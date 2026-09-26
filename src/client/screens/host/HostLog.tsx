@@ -1,6 +1,6 @@
-// Full unredacted log (D1) — the host projection's `log` is already the god
-// view (no hidden-vote filtering, no actionSubmitted stripping — see
-// `resolvedLog(state, hostLive)` in src/engine/project.ts). This renders
+// Full unredacted log (D1) — the host projection's `log` is the live case file
+// (no hidden-vote filtering or action stripping; player/public projections use
+// an explicit safe allowlist in src/engine/project.ts). This renders
 // every event as plain text, auto-scrolling to the latest entry unless the
 // host has scrolled up to read history ("pin-to-latest").
 import { useEffect, useRef, useState } from "react";

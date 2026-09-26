@@ -134,7 +134,7 @@ export default function HostGame({ room, game }: { room: ClientRoomState; game: 
           <p className="text-[0.6rem] uppercase tracking-[0.3em] text-smoke">
             Lead investigator
           </p>
-          <h1 className="file-heading text-xl text-blood">The Case Board</h1>
+          <h1 className="file-heading text-xl text-blood-hi">The Case Board</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <StorytellerSetupButton story={room.story} />

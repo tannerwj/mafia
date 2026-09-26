@@ -289,7 +289,7 @@ export default function Room({ code }: { code: string }) {
         <p className="text-[0.65rem] uppercase tracking-[0.3em] text-smoke">
           Credentials on file
         </p>
-        <h1 className="file-heading text-2xl text-blood">Resume the case?</h1>
+        <h1 className="file-heading text-2xl text-blood-hi">Resume the case?</h1>
         <p className="text-center text-sm text-smoke">
           This device holds the lead investigator's key for file {code}.
         </p>
@@ -324,7 +324,7 @@ export default function Room({ code }: { code: string }) {
           onJoinAsNew={handleJoinAsNew}
         />
         {lastError && (
-          <p data-testid="room-error" className="p-2 text-center text-sm text-blood">
+          <p data-testid="room-error" role="alert" className="p-2 text-center text-sm text-blood-hi">
             <span aria-hidden className="mr-1 select-none">
               //
             </span>

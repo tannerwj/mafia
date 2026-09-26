@@ -132,6 +132,16 @@ test.describe("Spec 18: no horizontal overflow at 360px", () => {
     // narrator board / controls drawer.
     await expect(hostPage.getByTestId("host-phase-label")).toBeVisible({ timeout: 25_000 });
     await expectNoHorizontalOverflow(hostPage);
+    const clippedHostNames = await hostPage.getByTestId("host-player-row").evaluateAll((rows) =>
+      rows.map((row) => {
+        const name = row.querySelector("div > span:nth-child(2)");
+        const view = row.ownerDocument.defaultView;
+        if (!name || !view) return true;
+        const style = view.getComputedStyle(name);
+        return style.textOverflow === "ellipsis" || name.scrollWidth > name.clientWidth;
+      }),
+    );
+    expect(clippedHostNames).toEqual([false, false, false]);
     // Anchored to the host case-board `<main>` via `host-phase-label`, same
     // reasoning as the two anchors above.
     await expectMinLeftPadding(
