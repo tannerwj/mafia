@@ -17,7 +17,7 @@
 // "auto"). "Reset to suggested" flips back to all-auto and broadcasts once so
 // players see the change too.
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ClientRoomState } from "../../../shared/protocol";
+import type { ClientRoomState, VisualTheme } from "../../../shared/protocol";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Stamp } from "../../components/ui/dossier";
@@ -32,13 +32,129 @@ import {
   suggestionHint,
   type Counts,
 } from "../../lib/hostRoleCounts";
-import { setRuleset as sendSetRuleset } from "../../store/gameStore";
+import { setRuleset as sendSetRuleset, setVisualTheme as sendSetVisualTheme } from "../../store/gameStore";
 import { hostSeatRows } from "../../store/hostView";
 import { PlayerTable } from "./PlayerTable";
 import PrivacyChip from "./PrivacyChip";
 import { StorytellerSetupButton } from "./Storyteller";
 
 const SET_RULESET_DEBOUNCE_MS = 250;
+
+const THEME_OPTIONS: Array<{
+  id: VisualTheme;
+  name: string;
+  description: string;
+}> = [
+  { id: "atelier", name: "Noir Atelier", description: "Ink, paper, and a warm brass glow." },
+  { id: "club", name: "Midnight Club", description: "Emerald velvet and champagne light." },
+  { id: "rain", name: "Neon Rain", description: "Cobalt glass, amber, and city nights." },
+];
+
+function ThemePicker({ state }: { state: ClientRoomState }) {
+  const selected = state.visualTheme;
+  const [pending, setPending] = useState<VisualTheme | null>(null);
+  const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const requestId = useRef(0);
+  const selectedRef = useRef(selected);
+  const timerRef = useRef<number | undefined>(undefined);
+  const observedRef = useRef({ theme: selected, revision: state.visualThemeRevision });
+
+  useEffect(() => {
+    const snapshotChanged = observedRef.current.theme !== selected || observedRef.current.revision !== state.visualThemeRevision;
+    selectedRef.current = selected;
+    observedRef.current = { theme: selected, revision: state.visualThemeRevision };
+
+    // A newer authoritative snapshot may come from another host tab. Once a
+    // snapshot changes, the room's selected value is the source of truth even
+    // if it differs from this tab's request; never let an old timeout paint a
+    // stale error over that value.
+    if (pending && snapshotChanged) {
+      requestId.current += 1;
+      if (timerRef.current !== undefined) window.clearTimeout(timerRef.current);
+      setPending(null);
+      setStatus("saved");
+    }
+  }, [pending, selected, state.visualThemeRevision]);
+
+  useEffect(() => () => {
+    if (timerRef.current !== undefined) window.clearTimeout(timerRef.current);
+  }, []);
+
+  function chooseTheme(theme: VisualTheme) {
+    if (theme === selected) {
+      setPending(null);
+      setStatus("saved");
+      return;
+    }
+
+    const currentRequest = ++requestId.current;
+    setPending(theme);
+    setStatus("saving");
+    sendSetVisualTheme(theme);
+
+    // A rejection is already surfaced by the store's shared toast. Clear the
+    // local saving label after a bounded wait so a rejected command can never
+    // leave the picker saying “saving” forever. The selected skin still comes
+    // only from the authoritative snapshot above.
+    if (timerRef.current !== undefined) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => {
+      if (requestId.current === currentRequest && selectedRef.current !== theme) {
+        setPending(null);
+        setStatus("error");
+      }
+    }, 5000);
+  }
+
+  const selectedOption = THEME_OPTIONS.find((option) => option.id === selected) ?? THEME_OPTIONS[0]!;
+
+  return (
+    <section className="theme-picker" data-testid="theme-picker" aria-labelledby="table-look-title">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[0.65rem] uppercase tracking-[0.2em] text-brass-hi">Table look</p>
+          <h2 id="table-look-title" className="mt-1 text-base font-semibold text-bone">Choose the room&apos;s mood</h2>
+          <p className="mt-1 text-xs leading-relaxed text-paper/70">
+            Everyone sees the same look. The change applies after the server saves it.
+          </p>
+        </div>
+        <span className="rounded-full border border-frame px-2 py-1 text-[0.6rem] uppercase tracking-[0.1em] text-smoke">
+          Host choice
+        </span>
+      </div>
+
+      <div className="theme-options mt-4" role="group" aria-label="Choose table look">
+        {THEME_OPTIONS.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            data-testid={`theme-option-${option.id}`}
+            data-theme={option.id}
+            aria-pressed={selected === option.id}
+            aria-label={`${option.name}: ${option.description}`}
+            onClick={() => chooseTheme(option.id)}
+            className="theme-option"
+          >
+            <strong className="text-sm font-semibold leading-tight">{option.name}</strong>
+            <small>{option.description}</small>
+          </button>
+        ))}
+      </div>
+
+      <p
+        data-testid="theme-status"
+        data-status={status}
+        className="theme-status mt-3"
+        role="status"
+        aria-live="polite"
+      >
+        {status === "saving" && `Saving ${THEME_OPTIONS.find((option) => option.id === pending)?.name ?? "table look"}…`}
+        {status === "saved" && `${selectedOption.name} is saved for the room.`}
+        {status === "error" && "The table look could not be saved. Try again."}
+        {status === "idle" && `${selectedOption.name} is selected.`}
+      </p>
+    </section>
+  );
+}
 
 // The wire ruleset: explicit editable counts + villager as the auto remainder,
 // plus the Spec 12 scenePhases toggle; every other field inherited from the
@@ -252,14 +368,17 @@ export default function HostLobby({
   }
 
   return (
-    <main className="page-p relative z-10 mx-auto flex min-h-dvh w-full max-w-3xl flex-col items-center gap-6 bg-ink text-paper">
-      <div className="flex w-full flex-wrap items-center justify-between gap-x-2 gap-y-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex flex-col">
-            <p className="text-[0.6rem] uppercase tracking-[0.3em] text-smoke">
-              Lead investigator
+    <main data-testid="host-lobby" className="host-lobby-page page-p relative z-10 mx-auto flex min-h-dvh w-full max-w-5xl flex-col gap-5 text-paper">
+      <header className="flex w-full flex-wrap items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div>
+            <p className="text-[0.62rem] uppercase tracking-[0.28em] text-smoke">
+              Host console · private room
             </p>
-            <h1 className="file-heading text-2xl text-blood-hi">The Case Room</h1>
+            <h1 className="file-heading mt-1 text-3xl text-bone">Set the table</h1>
+            <p className="mt-1 max-w-xl text-sm text-paper/70">
+              Share the room, choose the cast, then start when every seat is ready.
+            </p>
           </div>
           <Stamp variant="confidential" className="hidden text-[0.6rem] sm:inline-flex" />
         </div>
@@ -267,41 +386,74 @@ export default function HostLobby({
           <HelpButton />
           <PrivacyChip />
         </div>
-      </div>
+      </header>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <span
-          data-testid="room-code"
-          className="rounded-sm border border-frame bg-ink-2 px-6 py-3 text-3xl tracking-[0.3em] text-brass-hi"
-        >
-          {state.roomCode}
-        </span>
-        <Button type="button" data-testid="copy-link" onClick={onCopyLink} variant="outline">
-          Share link
-        </Button>
-        <StorytellerSetupButton story={state.story} />
-      </div>
+      <ol className="host-setup-steps w-full" data-testid="host-setup-steps" aria-label="Setup steps">
+        {[
+          ["1", "Share room"],
+          ["2", "Players join"],
+          ["3", "Choose look + roles"],
+          ["4", "Start game"],
+        ].map(([number, label]) => (
+          <li key={number} className="host-setup-step">
+            <strong aria-hidden>{number}</strong>
+            <span>{label}</span>
+          </li>
+        ))}
+      </ol>
 
-      <div className="grid w-full grid-cols-1 gap-6 md:grid-cols-2">
-        <div className="flex flex-col gap-3">
-          <p className="text-[0.65rem] uppercase tracking-[0.2em] text-smoke">
-            Subjects ({playerCount})
-          </p>
-          <PlayerTable rows={rows} inGame={false} lobbyMode onKick={onKick} />
-
-          <div className="flex flex-col items-center gap-2 self-start rounded-sm border border-frame bg-ink-2 p-3">
-            <p className="text-[0.65rem] uppercase tracking-[0.2em] text-smoke">
-              Scan to join
+      <section className="host-share-card" aria-labelledby="host-share-title">
+        <div className="flex min-w-0 flex-col gap-3">
+          <div>
+            <p className="text-[0.65rem] uppercase tracking-[0.2em] text-brass-hi">Share this room</p>
+            <h2 id="host-share-title" className="mt-1 text-xl font-semibold text-bone">Invite players to the table</h2>
+            <p className="mt-1 text-sm leading-relaxed text-paper/75">
+              Use the code, link, or QR. Your host screen stays separate from player secrets.
             </p>
-            <QrCode
-              value={`${location.origin}/room/${state.roomCode}`}
-              size={224}
-              className="rounded-sm"
-            />
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span data-testid="room-code" className="lobby-code">
+              {state.roomCode}
+            </span>
+            <Button type="button" data-testid="copy-link" onClick={onCopyLink} variant="outline" className="host-share-action">
+              Copy / share link
+            </Button>
+          </div>
+          <p className="text-xs text-smoke" aria-live="polite">
+            {playerCount === 0 ? "No players yet — keep this screen open while they join." : `${playerCount} ${playerCount === 1 ? "player" : "players"} joined.`}
+          </p>
         </div>
+        <div className="host-share-qr">
+          <QrCode
+            value={`${location.origin}/room/${state.roomCode}`}
+            size={150}
+            className="rounded-sm"
+          />
+          <span className="mt-1 text-[0.58rem] uppercase tracking-[0.12em] text-slate-900">Scan to join</span>
+        </div>
+      </section>
 
-        <div className="flex flex-col gap-4">
+      <div className="grid w-full grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(19rem,0.9fr)]">
+        <section className="flex min-w-0 flex-col gap-3" aria-labelledby="players-title">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <p className="text-[0.65rem] uppercase tracking-[0.2em] text-smoke">Step 2</p>
+              <h2 id="players-title" className="mt-1 text-xl font-semibold text-bone">Players at the table</h2>
+            </div>
+            <span className="rounded-full border border-frame px-2.5 py-1 text-xs tabular-nums text-smoke">{playerCount} joined</span>
+          </div>
+          <PlayerTable rows={rows} inGame={false} lobbyMode onKick={onKick} />
+          <p className="text-xs leading-relaxed text-smoke">
+            Names and connection status are visible here. Roles and night actions stay private to each player.
+          </p>
+        </section>
+
+        <section className="flex min-w-0 flex-col gap-4" aria-labelledby="setup-title">
+          <div>
+            <p className="text-[0.65rem] uppercase tracking-[0.2em] text-smoke">Step 3</p>
+            <h2 id="setup-title" className="mt-1 text-xl font-semibold text-bone">Choose the setup</h2>
+          </div>
+          <ThemePicker state={state} />
           <RoleCountEditor
             counts={displayedCounts}
             villagers={villagers}
@@ -321,7 +473,7 @@ export default function HostLobby({
             <span className="flex flex-col">
               <span className="text-sm text-paper">Sunrise / sunset scenes</span>
               <span className="text-[0.7rem] text-smoke">
-                // Narrator taps Reveal to set each scene aloud. In-person pacing.
+                The host reveals each scene aloud for in-person pacing.
               </span>
             </span>
             <span
@@ -333,18 +485,32 @@ export default function HostLobby({
               <span className={`h-4 w-4 rounded-full ${scenePhases ? "bg-brass-hi" : "bg-smoke"}`} />
             </span>
           </button>
-          <Button
-            type="button"
-            data-testid="start-game"
-            onClick={() => onStartGame(ruleset)}
-            disabled={!canStart}
-            size="lg"
-            variant="brass"
-            className="w-full"
-          >
-            {canStart ? "Start game" : startBlockedReason}
-          </Button>
-        </div>
+          <div className="flex items-center justify-between gap-3 rounded-md border border-frame bg-ink-2 px-3 py-3">
+            <div>
+              <p className="text-[0.63rem] uppercase tracking-[0.16em] text-smoke">Story setting</p>
+              <p className="mt-1 text-xs text-paper/70">Optional narration style for the AI Storyteller.</p>
+            </div>
+            <StorytellerSetupButton story={state.story} />
+          </div>
+          <div className="flex flex-col gap-2">
+            {!canStart && (
+              <p data-testid="start-blocked-reason" className="text-sm text-blood-hi" role="status">
+                {startBlockedReason}
+              </p>
+            )}
+            <Button
+              type="button"
+              data-testid="start-game"
+              onClick={() => onStartGame(ruleset)}
+              disabled={!canStart}
+              size="lg"
+              variant="brass"
+              className="w-full"
+            >
+              {canStart ? "Start game" : "Start game"}
+            </Button>
+          </div>
+        </section>
       </div>
     </main>
   );

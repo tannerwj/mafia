@@ -44,6 +44,7 @@ function TargetList({
             type="button"
             data-testid={testid}
             data-target-id={c.id}
+            aria-pressed={selected}
             disabled={disabled}
             onClick={() => onPick(c.id)}
             // NOTE: the selected state keeps `border-brass` — the reconnect
@@ -207,6 +208,15 @@ function MafiaNightPanel({
         testid="night-target-option"
         onPick={(id) => submitAction(id)}
       />
+      {myTarget && !iAmLocked && (
+        <p
+          data-testid="night-selection-status"
+          className="rounded-sm border border-brass/40 bg-ink-3 px-3 py-2 text-center text-sm text-brass-hi"
+          aria-live="polite"
+        >
+          {playerNames.get(myTarget) ?? myTarget} selected. Lock in to send the order.
+        </p>
+      )}
       <button
         type="button"
         data-testid="lock-in-button"
@@ -288,13 +298,22 @@ function IndividualNightPanel({
         testid={you.nightIsDecoy ? "night-watch-option" : "night-target-option"}
         onPick={(id) => submitAction(id)}
       />
+      {myTarget && !locked && (
+        <p
+          data-testid="night-selection-status"
+          className="rounded-sm border border-brass/40 bg-ink-3 px-3 py-2 text-center text-sm text-brass-hi"
+          aria-live="polite"
+        >
+          {playerNames.get(myTarget) ?? myTarget} selected. Confirm to lock this action.
+        </p>
+      )}
       {locked ? (
         <div className="flex flex-col gap-2">
           <div
             data-testid="night-submitted"
             className="animate-brass-pulse rounded-sm border border-brass/60 bg-ink-3 p-3 text-center text-sm text-brass-hi"
           >
-            Locked in. Waiting for the night to close…
+            Action locked. Waiting for the night to close…
           </div>
           <button
             type="button"
@@ -351,10 +370,10 @@ export default function NightActionDrawer({
   return (
     <Drawer.Root open={open} onOpenChange={setOpen} dismissible={false} modal={false}>
       <Drawer.Portal>
-        <Drawer.Overlay className="fixed inset-0 z-40 bg-ink/80" />
+        <Drawer.Overlay className="fixed inset-0 z-40 bg-ink/55" />
         <Drawer.Content
           data-testid="night-action-drawer"
-          className="fixed bottom-0 left-0 right-0 z-50 mx-auto flex max-h-[85dvh] w-full max-w-md flex-col rounded-t-lg border-t-2 border-frame bg-ink-2 p-6 shadow-card"
+          className="fixed bottom-0 left-0 right-0 z-50 mx-auto flex max-h-[78dvh] w-full max-w-md flex-col rounded-t-lg border-t-2 border-frame bg-ink-2 px-6 pb-0 pt-5 shadow-card"
         >
           <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-frame" />
           <p className="text-[0.6rem] uppercase tracking-[0.35em] text-smoke">
@@ -364,10 +383,15 @@ export default function NightActionDrawer({
             <h2 className="file-heading mt-1 text-2xl text-bone">{drawerTitle}</h2>
           </Drawer.Title>
           <Drawer.Description asChild>
-            <span className="sr-only">Your night action for day {game.day}.</span>
+            <span className="mt-2 text-sm leading-relaxed text-paper/80">
+              Choose a name, then confirm. Your choice can be changed until it is locked.
+            </span>
           </Drawer.Description>
 
-          <div className="safe-pb mt-4 overflow-y-auto">
+          <div
+            className="safe-pb mt-4 overflow-y-auto"
+            style={{ paddingBottom: "calc(4.5rem + env(safe-area-inset-bottom))" }}
+          >
             {isMafia ? (
               <MafiaNightPanel you={you} players={game.players} playerNames={playerNames} />
             ) : isDecoy ? (

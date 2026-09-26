@@ -69,6 +69,97 @@
 
 :root {
   color-scheme: dark;
+
+  /* Room-wide visual theme tokens. The existing `--color-*` names remain the
+   * Tailwind-facing API for the rest of the client; these semantic aliases
+   * make the palette legible in one place and let the three skins swap values
+   * without branching any game or role UI. */
+  --theme-bg: #0d0c0a;
+  --theme-surface: #15130f;
+  --theme-raised: #1c1a15;
+  --theme-text: #d8c69a;
+  --theme-strong-text: #e7dcc0;
+  --theme-muted: #9a8f76;
+  --theme-border: #3d382c;
+  --theme-action: #8a7d4e;
+  --theme-action-text: #b7a86a;
+  --theme-danger: #a01e1e;
+  --theme-danger-text: #ef7676;
+  --theme-focus: #b7a86a;
+  --theme-redaction: #090806;
+  --theme-glow: 138 125 78;
+  --theme-danger-glow: 160 30 30;
+
+  /* Keep the names consumed by existing utilities stable while resolving
+   * their values through the room skin. */
+  --color-ink: var(--theme-bg);
+  --color-ink-2: var(--theme-surface);
+  --color-ink-3: var(--theme-raised);
+  --color-paper: var(--theme-text);
+  --color-bone: var(--theme-strong-text);
+  --color-smoke: var(--theme-muted);
+  --color-frame: var(--theme-border);
+  --color-brass: var(--theme-action);
+  --color-brass-hi: var(--theme-action-text);
+  --color-blood: var(--theme-danger);
+  --color-blood-hi: var(--theme-danger-text);
+}
+
+/* These values are intentionally independent of roles and phases. A room
+ * has one public skin chosen by the host, so nearby phones always share the
+ * same visual language and a theme can never become a faction signal. */
+[data-visual-theme="atelier"] {
+  --theme-bg: #0d0c0a;
+  --theme-surface: #15130f;
+  --theme-raised: #1c1a15;
+  --theme-text: #d8c69a;
+  --theme-strong-text: #e7dcc0;
+  --theme-muted: #9a8f76;
+  --theme-border: #3d382c;
+  --theme-action: #8a7d4e;
+  --theme-action-text: #b7a86a;
+  --theme-danger: #a01e1e;
+  --theme-danger-text: #ef7676;
+  --theme-focus: #b7a86a;
+  --theme-redaction: #090806;
+  --theme-glow: 138 125 78;
+  --theme-danger-glow: 160 30 30;
+}
+
+[data-visual-theme="club"] {
+  --theme-bg: #071411;
+  --theme-surface: #0d211b;
+  --theme-raised: #153027;
+  --theme-text: #e6dfcf;
+  --theme-strong-text: #fff7e5;
+  --theme-muted: #b4ad9a;
+  --theme-border: #3c5b4d;
+  --theme-action: #b69259;
+  --theme-action-text: #f0cf93;
+  --theme-danger: #ad3e4a;
+  --theme-danger-text: #ff929a;
+  --theme-focus: #f0cf93;
+  --theme-redaction: #06100d;
+  --theme-glow: 182 146 89;
+  --theme-danger-glow: 173 62 74;
+}
+
+[data-visual-theme="rain"] {
+  --theme-bg: #06101d;
+  --theme-surface: #0a1a2d;
+  --theme-raised: #10263c;
+  --theme-text: #d5e6f7;
+  --theme-strong-text: #f2f7ff;
+  --theme-muted: #94acc5;
+  --theme-border: #2a5272;
+  --theme-action: #3e8bdf;
+  --theme-action-text: #8fc5ff;
+  --theme-danger: #bc465d;
+  --theme-danger-text: #ff91a6;
+  --theme-focus: #8fc5ff;
+  --theme-redaction: #040b14;
+  --theme-glow: 62 139 223;
+  --theme-danger-glow: 188 70 93;
 }
 
 html,
@@ -88,7 +179,7 @@ body {
  * ring. Keep keyboard focus visible across those controls as well. */
 button:focus-visible,
 [role="switch"]:focus-visible {
-  outline: 2px solid var(--color-brass-hi);
+  outline: 2px solid var(--theme-focus);
   outline-offset: 2px;
 }
 
@@ -151,8 +242,31 @@ button:focus-visible,
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(120% 90% at 50% 0%, rgb(138 125 78 / 0.06), transparent 55%),
+    radial-gradient(120% 90% at 50% 0%, rgb(var(--theme-glow) / 0.08), transparent 55%),
     radial-gradient(140% 120% at 50% 120%, rgb(0 0 0 / 0.4), transparent 60%);
+}
+
+[data-visual-theme="club"] .grain-overlay {
+  opacity: 0.045;
+  mix-blend-mode: screen;
+}
+
+[data-visual-theme="club"] .grain-overlay::after {
+  background:
+    linear-gradient(135deg, rgb(190 157 99 / 0.05), transparent 42%),
+    radial-gradient(140% 120% at 50% 120%, rgb(0 0 0 / 0.45), transparent 60%);
+}
+
+[data-visual-theme="rain"] .grain-overlay {
+  opacity: 0.07;
+  mix-blend-mode: screen;
+}
+
+[data-visual-theme="rain"] .grain-overlay::after {
+  background:
+    repeating-linear-gradient(103deg, transparent 0 58px, rgb(143 197 255 / 0.025) 59px 60px, transparent 61px 116px),
+    radial-gradient(120% 90% at 50% 0%, rgb(62 139 223 / 0.1), transparent 58%),
+    radial-gradient(140% 120% at 50% 120%, rgb(0 0 0 / 0.5), transparent 60%);
 }
 
 /* Phase ambiance — a decorative full-viewport wash keyed off the SAME
@@ -170,15 +284,15 @@ button:focus-visible,
 
 [data-phase="night"] .phase-ambiance {
   background:
-    radial-gradient(120% 80% at 50% -10%, rgb(154 143 118 / 0.14), transparent 60%),
-    linear-gradient(to bottom, rgb(13 12 10 / 0), rgb(13 12 10 / 0.6));
+    radial-gradient(120% 80% at 50% -10%, rgb(var(--theme-glow) / 0.14), transparent 60%),
+    linear-gradient(to bottom, rgb(var(--theme-glow) / 0), rgb(0 0 0 / 0.6));
 }
 
 [data-phase="day"] .phase-ambiance,
 [data-phase="runoff"] .phase-ambiance {
   background: radial-gradient(
     100% 70% at 50% 0%,
-    rgb(138 125 78 / 0.12),
+    rgb(var(--theme-glow) / 0.12),
     transparent 55%
   );
 }
@@ -186,23 +300,23 @@ button:focus-visible,
 [data-phase="dawn"] .phase-ambiance {
   background: radial-gradient(
     90% 60% at 50% 40%,
-    rgb(138 125 78 / 0.16),
-    rgb(13 12 10 / 0) 60%
+    rgb(var(--theme-glow) / 0.16),
+    rgb(var(--theme-glow) / 0) 60%
   );
 }
 
 [data-phase="dusk"] .phase-ambiance {
   background: radial-gradient(
     90% 60% at 50% 40%,
-    rgb(160 30 30 / 0.16),
-    rgb(13 12 10 / 0) 60%
+    rgb(var(--theme-danger-glow) / 0.16),
+    rgb(var(--theme-danger-glow) / 0) 60%
   );
 }
 
 [data-phase="ended"] .phase-ambiance {
   background: radial-gradient(
     100% 70% at 50% 30%,
-    rgb(160 30 30 / 0.12),
+    rgb(var(--theme-danger-glow) / 0.12),
     transparent 60%
   );
 }
@@ -245,6 +359,7 @@ button:focus-visible,
 /* The one heavy "display" heading treatment — a struck typewriter headline.
  * Heavy weight + tight tracking on the mono stack; no serif, no download. */
 .file-heading {
+  font-family: var(--font-display);
   font-weight: 800;
   letter-spacing: -0.01em;
   text-transform: uppercase;
@@ -256,16 +371,16 @@ button:focus-visible,
 .redaction {
   display: inline-block;
   background: #05040300;
-  background-color: var(--color-ink);
+  background-color: var(--theme-redaction);
   color: transparent;
   border-radius: 1px;
   box-shadow: 0 0 0 1px rgb(0 0 0 / 0.9);
   /* The marker ink itself: near-black with a faint uneven sheen. */
   background-image: linear-gradient(
     92deg,
-    #0a0908 0%,
-    #050403 40%,
-    #0a0908 100%
+    color-mix(in srgb, var(--theme-redaction) 94%, white) 0%,
+    var(--theme-redaction) 40%,
+    color-mix(in srgb, var(--theme-redaction) 94%, white) 100%
   );
   user-select: none;
 }
@@ -321,13 +436,13 @@ button:focus-visible,
 
 @keyframes stamp-thud {
   0% {
-    box-shadow: 0 0 0 0 rgb(138 125 78 / 0);
+    box-shadow: 0 0 0 0 rgb(var(--theme-glow) / 0);
   }
   50% {
-    box-shadow: 0 0 0 3px rgb(138 125 78 / 0.4);
+    box-shadow: 0 0 0 3px rgb(var(--theme-glow) / 0.4);
   }
   100% {
-    box-shadow: 0 0 0 0 rgb(138 125 78 / 0);
+    box-shadow: 0 0 0 0 rgb(var(--theme-glow) / 0);
   }
 }
 
@@ -339,6 +454,624 @@ button:focus-visible,
  * stamp-thud in the olive accent. */
 .animate-brass-pulse {
   animation: stamp-thud 1400ms ease-in-out 2;
+}
+
+/* ---------------------------------------------------------------------------
+ * Shared lobby surfaces. These are intentionally layout-only helpers: the
+ * React tree and its data-test hooks stay identical for every visual theme.
+ * --------------------------------------------------------------------------- */
+.home-page {
+  background:
+    radial-gradient(75% 55% at 50% 0%, rgb(var(--theme-glow) / 0.11), transparent 68%),
+    var(--color-ink);
+}
+
+.home-hero {
+  width: 100%;
+  max-width: 62rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(18rem, 0.9fr);
+  align-items: center;
+  gap: clamp(1.5rem, 4vw, 4rem);
+}
+
+.home-brand {
+  position: relative;
+  padding: clamp(1rem, 3vw, 2rem) 0;
+}
+
+.home-brand::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3.5rem;
+  height: 2px;
+  background: var(--color-brass-hi);
+  box-shadow: 0 0 24px rgb(var(--theme-glow) / 0.32);
+}
+
+.home-title {
+  margin: 0.55rem 0 0;
+  font-family: var(--font-display);
+  font-size: clamp(3.8rem, 13vw, 7.5rem);
+  font-weight: 900;
+  letter-spacing: -0.08em;
+  line-height: 0.88;
+  color: var(--color-bone);
+  text-shadow: 0 0 30px rgb(var(--theme-glow) / 0.11);
+}
+
+.home-title-mark {
+  color: var(--color-blood-hi);
+}
+
+.home-lede {
+  max-width: 31rem;
+  margin-top: 1.25rem;
+  color: var(--color-paper);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(1rem, 1.8vw, 1.15rem);
+  line-height: 1.6;
+}
+
+.home-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin-top: 1.25rem;
+  color: var(--color-smoke);
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.home-action-card {
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--color-frame) 88%, var(--color-brass) 12%);
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--color-ink-2) 92%, var(--color-brass) 8%);
+  box-shadow: 0 18px 55px rgb(0 0 0 / 0.2), 0 0 0 1px rgb(var(--theme-glow) / 0.05);
+}
+
+.home-action-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.home-action-card input {
+  min-height: 3rem;
+  border-color: var(--color-frame);
+  background: var(--color-ink);
+}
+
+.home-action-card input:focus-visible {
+  border-color: var(--color-brass-hi);
+  outline: 2px solid var(--theme-focus);
+  outline-offset: 2px;
+}
+
+.home-action-card .home-action-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--color-smoke);
+  font-size: 0.65rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.home-action-divider::before,
+.home-action-divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: var(--color-frame);
+}
+
+.home-explainer {
+  width: 100%;
+  max-width: 62rem;
+  border-top: 1px solid var(--color-frame);
+  padding-top: clamp(1.5rem, 4vw, 3rem);
+}
+
+.home-explainer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(1.25rem, 3vw, 3rem);
+}
+
+.room-page,
+.host-lobby-page {
+  background:
+    radial-gradient(75% 34% at 50% 0%, rgb(var(--theme-glow) / 0.08), transparent 70%),
+    var(--color-ink);
+}
+
+.lobby-next-step {
+  border: 1px solid color-mix(in srgb, var(--color-brass) 46%, var(--color-frame));
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--color-ink-2) 88%, var(--color-brass) 12%);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.16);
+}
+
+.lobby-seat-card {
+  border: 1px solid var(--color-frame);
+  border-radius: 0.45rem;
+  background: var(--color-ink-2);
+}
+
+.lobby-code {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 3.5rem;
+  border: 1px solid var(--color-brass);
+  border-radius: 0.4rem;
+  background: var(--color-ink-2);
+  color: var(--color-brass-hi);
+  font-size: clamp(1.55rem, 5vw, 2.1rem);
+  font-weight: 800;
+  letter-spacing: 0.24em;
+  line-height: 1;
+  padding: 0.5rem 1rem 0.5rem 1.25rem;
+}
+
+.host-setup-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.host-setup-step {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--color-smoke);
+  font-size: 0.67rem;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.host-setup-step strong {
+  display: inline-grid;
+  width: 1.8rem;
+  height: 1.8rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--color-frame);
+  border-radius: 50%;
+  background: var(--color-ink-2);
+  color: var(--color-brass-hi);
+  font-size: 0.7rem;
+}
+
+.host-share-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+  border: 1px solid var(--color-frame);
+  border-radius: 0.45rem;
+  background: var(--color-ink-2);
+  padding: clamp(0.9rem, 2vw, 1.25rem);
+}
+
+.host-share-qr {
+  display: grid;
+  place-items: center;
+  border-radius: 0.35rem;
+  background: #fff;
+  padding: 0.5rem;
+}
+
+.theme-picker {
+  width: 100%;
+  border: 1px solid var(--color-frame);
+  border-radius: 0.45rem;
+  background: var(--color-ink-3);
+  padding: 1rem;
+}
+
+.theme-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.theme-option {
+  display: flex;
+  min-height: 7rem;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 0.3rem;
+  border: 1px solid var(--color-frame);
+  border-radius: 0.35rem;
+  background: var(--option-bg, var(--color-ink-2));
+  color: var(--option-text, var(--color-paper));
+  padding: 0.65rem;
+  text-align: left;
+  transition: border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+.theme-option:hover {
+  transform: translateY(-2px);
+}
+
+.theme-option:focus-visible {
+  outline: 2px solid var(--theme-focus);
+  outline-offset: 2px;
+}
+
+.theme-option[aria-pressed="true"] {
+  border-color: var(--option-accent, var(--color-brass-hi));
+  box-shadow: inset 0 0 0 1px var(--option-accent, var(--color-brass-hi)), 0 0 0 2px rgb(var(--theme-glow) / 0.14);
+}
+
+.theme-option::before {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 1.4rem;
+  border-radius: 0.18rem;
+  background: linear-gradient(100deg, var(--option-accent), var(--option-highlight));
+  opacity: 0.9;
+}
+
+.theme-option small {
+  color: color-mix(in srgb, currentColor 74%, transparent);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.68rem;
+  line-height: 1.25;
+}
+
+.theme-option[data-theme="atelier"] {
+  --option-bg: #15130f;
+  --option-text: #e7dcc0;
+  --option-accent: #b7a86a;
+  --option-highlight: #7f1f23;
+}
+
+.theme-option[data-theme="club"] {
+  --option-bg: #0d211b;
+  --option-text: #fff7e5;
+  --option-accent: #f0cf93;
+  --option-highlight: #2d8068;
+}
+
+.theme-option[data-theme="rain"] {
+  --option-bg: #0a1a2d;
+  --option-text: #f2f7ff;
+  --option-accent: #8fc5ff;
+  --option-highlight: #d46a57;
+}
+
+.theme-status {
+  min-height: 1.2rem;
+  color: var(--color-smoke);
+  font-size: 0.72rem;
+}
+
+.theme-status[data-status="saved"] {
+  color: var(--color-brass-hi);
+}
+
+.theme-status[data-status="error"] {
+  color: var(--color-danger-text, var(--color-blood-hi));
+}
+
+/* ---------------------------------------------------------------------------
+ * Art direction. The room still uses one DOM tree and one action contract,
+ * but the skins have different typographic voices and framing systems. These
+ * selectors deliberately target public surfaces and shared primitives; no
+ * role, faction, or phase gets a theme-specific treatment.
+ * --------------------------------------------------------------------------- */
+html[data-visual-theme="atelier"] {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --radius-lg: 0.5rem;
+  --radius-md: 0.375rem;
+  --shadow-card: 0 14px 32px -18px rgb(0 0 0 / 0.8);
+}
+
+html[data-visual-theme="club"] {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: Didot, "Bodoni 72", "Bodoni MT", Georgia, serif;
+  --radius-lg: 0.18rem;
+  --radius-md: 0.12rem;
+  --shadow-card: 0 16px 34px -18px rgb(0 0 0 / 0.82), 0 0 0 1px rgb(240 207 147 / 0.07);
+}
+
+html[data-visual-theme="rain"] {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --radius-lg: 0.2rem;
+  --radius-md: 0.16rem;
+  --shadow-card: 0 16px 30px -20px rgb(0 0 0 / 0.9), 0 0 24px rgb(62 139 223 / 0.04);
+}
+
+[data-visual-theme="atelier"] body {
+  font-family: var(--font-sans);
+  letter-spacing: 0.005em;
+}
+
+[data-visual-theme="atelier"] .file-heading {
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  text-transform: none;
+}
+
+[data-visual-theme="atelier"] .file-frame,
+[data-visual-theme="atelier"] [class~="shadow-card"] {
+  border-style: solid;
+  border-width: 1px;
+  border-color: color-mix(in srgb, var(--color-frame) 86%, var(--color-brass) 14%);
+}
+
+[data-visual-theme="atelier"] .file-frame {
+  box-shadow: inset 3px 0 0 rgb(var(--theme-glow) / 0.16), var(--shadow-card);
+}
+
+[data-visual-theme="atelier"] .home-title {
+  font-weight: 800;
+  letter-spacing: -0.085em;
+}
+
+[data-visual-theme="atelier"] .home-action-card {
+  border-top: 2px solid var(--color-brass);
+}
+
+[data-visual-theme="atelier"] .host-setup-step strong {
+  border-radius: 50%;
+}
+
+[data-visual-theme="club"] body {
+  font-family: var(--font-sans);
+  letter-spacing: 0.018em;
+}
+
+[data-visual-theme="club"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0.65rem;
+  z-index: 0;
+  pointer-events: none;
+  border: 1px solid rgb(var(--theme-glow) / 0.16);
+  box-shadow: inset 0 0 0 4px rgb(var(--theme-glow) / 0.035);
+}
+
+[data-visual-theme="club"] .file-heading {
+  font-weight: 600;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+[data-visual-theme="club"] .file-frame,
+[data-visual-theme="club"] [class~="shadow-card"],
+[data-visual-theme="club"] .theme-picker,
+[data-visual-theme="club"] .host-share-card,
+[data-visual-theme="club"] .lobby-seat-card,
+[data-visual-theme="club"] .lobby-next-step,
+[data-visual-theme="club"] .home-action-card {
+  border-style: double;
+  border-width: 3px;
+  border-color: color-mix(in srgb, var(--color-frame) 76%, var(--color-brass-hi) 24%);
+  border-radius: 0.2rem;
+}
+
+[data-visual-theme="club"] .file-frame,
+[data-visual-theme="club"] [class~="shadow-card"] {
+  box-shadow: inset 0 0 0 1px rgb(var(--theme-glow) / 0.08), var(--shadow-card);
+}
+
+[data-visual-theme="club"] button {
+  border-radius: 0.18rem;
+  letter-spacing: 0.13em;
+}
+
+[data-visual-theme="club"] .theme-option {
+  border-style: solid;
+  border-width: 1px;
+  border-radius: 0.18rem;
+}
+
+[data-visual-theme="club"] .theme-option::before {
+  border-radius: 0;
+  background: linear-gradient(90deg, var(--option-accent), transparent 70%), repeating-linear-gradient(90deg, transparent 0 9px, rgb(255 247 229 / 0.24) 10px 11px);
+}
+
+[data-visual-theme="club"] .host-setup-step strong {
+  border-radius: 0.14rem;
+  border-style: double;
+  border-width: 3px;
+}
+
+[data-visual-theme="club"] .home-title {
+  font-weight: 600;
+  letter-spacing: -0.065em;
+  text-shadow: 0 3px 0 rgb(0 0 0 / 0.24), 0 0 28px rgb(var(--theme-glow) / 0.14);
+}
+
+[data-visual-theme="club"] .home-title-mark {
+  color: var(--color-brass-hi);
+}
+
+[data-visual-theme="rain"] body {
+  font-family: var(--font-sans);
+  letter-spacing: 0.002em;
+}
+
+[data-visual-theme="rain"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(115deg, transparent 0 32%, rgb(143 197 255 / 0.035) 32.1%, transparent 32.35% 67%, rgb(143 197 255 / 0.028) 67.1%, transparent 67.3%);
+  border-top: 1px solid rgb(var(--theme-glow) / 0.2);
+}
+
+[data-visual-theme="rain"] .file-heading {
+  font-weight: 750;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+[data-visual-theme="rain"] .file-frame,
+[data-visual-theme="rain"] [class~="shadow-card"],
+[data-visual-theme="rain"] .theme-picker,
+[data-visual-theme="rain"] .host-share-card,
+[data-visual-theme="rain"] .lobby-seat-card,
+[data-visual-theme="rain"] .lobby-next-step,
+[data-visual-theme="rain"] .home-action-card {
+  border-style: solid;
+  border-width: 1px;
+  border-color: color-mix(in srgb, var(--color-frame) 72%, var(--color-brass-hi) 28%);
+  border-radius: 0.2rem;
+}
+
+[data-visual-theme="rain"] .file-frame,
+[data-visual-theme="rain"] [class~="shadow-card"] {
+  box-shadow: var(--shadow-card);
+}
+
+[data-visual-theme="rain"] button {
+  border-radius: 0.2rem;
+  letter-spacing: 0.08em;
+}
+
+[data-visual-theme="rain"] .theme-option {
+  border-left: 2px solid var(--option-accent, var(--color-brass-hi));
+  border-radius: 0.15rem;
+}
+
+[data-visual-theme="rain"] .theme-option::before {
+  height: 0.65rem;
+  border-radius: 0.08rem;
+  background: linear-gradient(90deg, var(--option-accent), var(--option-highlight));
+}
+
+[data-visual-theme="rain"] .home-title {
+  font-weight: 760;
+  letter-spacing: -0.095em;
+  text-shadow: 0 0 24px rgb(var(--theme-glow) / 0.24);
+}
+
+[data-visual-theme="rain"] .home-title-mark {
+  color: var(--color-brass-hi);
+}
+
+@media (max-width: 700px) {
+  .home-hero {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1.15rem;
+  }
+
+  .home-brand {
+    padding-bottom: 0.3rem;
+  }
+
+  .home-title {
+    font-size: clamp(4rem, 22vw, 6rem);
+  }
+
+  .home-lede {
+    max-width: none;
+    margin-top: 1rem;
+    font-size: 0.98rem;
+  }
+
+  .home-explainer-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .host-setup-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 0.8rem;
+  }
+
+  .host-share-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .host-share-qr {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 380px) {
+  .theme-options {
+    grid-template-columns: 1fr;
+  }
+
+  .theme-option {
+    min-height: 4.4rem;
+    display: grid;
+    grid-template-columns: 5rem minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    column-gap: 0.65rem;
+    align-items: center;
+    padding: 0.5rem;
+  }
+
+  .theme-option::before {
+    grid-row: 1 / span 2;
+    height: 100%;
+  }
+
+  /* Keep the join QR visible beside the code and share action on the
+   * narrowest host screens. The canvas keeps its room-qr test hook and URL;
+   * only its displayed size changes, preserving the camera-readable backing
+   * buffer while keeping setup controls near the first viewport. */
+  .host-share-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 0.65rem;
+    padding: 0.75rem;
+  }
+
+  .host-share-card > :first-child {
+    min-width: 0;
+  }
+
+  .host-share-action {
+    max-width: 100%;
+    padding-inline: 0.4rem;
+    font-size: 0.62rem;
+    letter-spacing: 0.07em;
+  }
+
+  .host-share-qr {
+    grid-column: 2;
+    grid-row: 1;
+    width: 7.25rem;
+    align-self: start;
+    padding: 0.25rem;
+  }
+
+  .host-share-qr canvas {
+    width: 6.5rem !important;
+    height: 6.5rem !important;
+  }
+
+  .host-share-qr span {
+    font-size: 0.45rem;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-option {
+    transition: none;
+  }
 }
 
 /* ---------------------------------------------------------------------------

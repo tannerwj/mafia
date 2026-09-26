@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const PORT = 5173;
+const PORT = Number(process.env.MAFIA_E2E_PORT ?? 5173);
 const BASE_URL = `http://localhost:${PORT}`;
 
 export default defineConfig({

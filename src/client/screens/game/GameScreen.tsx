@@ -28,6 +28,26 @@ import HelpButton from "../../components/HelpButton";
 // sat visibly dim for twice as long as the spec's pin, not "stuck").
 const FADE_MS = 150;
 
+function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function usePrefersReducedMotion(): boolean {
+  const [reducedMotion, setReducedMotion] = useState(prefersReducedMotion);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setReducedMotion(mediaQuery.matches);
+    update();
+    mediaQuery.addEventListener("change", update);
+    return () => mediaQuery.removeEventListener("change", update);
+  }, []);
+
+  return reducedMotion;
+}
+
 // Spec 12 phase-discriminant audit: every Phase gets an explicit tint arm — no
 // fallthrough. sunrise reads as the tail of night (cool), sunset as the tail of
 // day (warm), matching the neighbouring resolved beat's mood.
@@ -69,12 +89,32 @@ function usePhaseTint(phase: ClientGameView["phase"], phaseGen: number) {
   const [tint, setTint] = useState<"night" | "day">(tintFor(phase));
   const [fadingGen, setFadingGen] = useState<number | null>(null);
   const lastGenRef = useRef(phaseGen);
+  const reducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
-    if (lastGenRef.current === phaseGen) return;
-    lastGenRef.current = phaseGen;
-    setFadingGen(phaseGen);
     const next = tintFor(phase);
+    if (lastGenRef.current === phaseGen) {
+      // If the OS preference changes during an in-flight fade, cancel the
+      // fade immediately. Otherwise the `data-tint="fading"` opacity state
+      // can leave the screen blank until the 150ms timer expires even though
+      // reduced motion explicitly disables the CSS transition.
+      if (reducedMotion) {
+        setTint(next);
+        setFadingGen(null);
+      }
+      return;
+    }
+    lastGenRef.current = phaseGen;
+
+    // Reduced-motion users should never see the intermediate blank state.
+    // Apply the new phase tint in the same render cycle and skip the timer.
+    if (reducedMotion) {
+      setTint(next);
+      setFadingGen(null);
+      return;
+    }
+
+    setFadingGen(phaseGen);
     const t = setTimeout(() => {
       setTint(next);
       // Only clear the fade if nothing newer has started since — a stale
@@ -82,9 +122,87 @@ function usePhaseTint(phase: ClientGameView["phase"], phaseGen: number) {
       setFadingGen((current) => (current === phaseGen ? null : current));
     }, FADE_MS);
     return () => clearTimeout(t);
-  }, [phase, phaseGen]);
+  }, [phase, phaseGen, reducedMotion]);
 
   return { tint, fading: fadingGen !== null };
+}
+
+function phaseHeading(phase: ClientGameView["phase"]): string {
+  switch (phase) {
+    case "night":
+      return "Night falls";
+    case "sunrise":
+      return "Morning scene";
+    case "dawn":
+      return "Morning report";
+    case "day":
+      return "Town decision";
+    case "runoff":
+      return "Runoff";
+    case "sunset":
+      return "Evening scene";
+    case "dusk":
+      return "Nightfall report";
+    case "ended":
+      return "Case closed";
+  }
+}
+
+function phaseTask(phase: ClientGameView["phase"], isDead: boolean, acknowledged: boolean): string {
+  if (isDead) return "Watch the room. Your file now shows resolved events only.";
+  switch (phase) {
+    case "night":
+      return "Complete your private action, then lock it in.";
+    case "sunrise":
+    case "sunset":
+      return "Listen to the host's scene reveal.";
+    case "dawn":
+      return acknowledged ? "Your report is acknowledged. Waiting for the room." : "Read the report, then continue.";
+    case "day":
+    case "runoff":
+      return "Choose a living suspect, then confirm your vote.";
+    case "dusk":
+      return "The host is closing the vote. Stay with the table.";
+    case "ended":
+      return "Review the verdict and the unsealed roles.";
+  }
+}
+
+function phaseStatus(phase: ClientGameView["phase"], isDead: boolean): string {
+  if (isDead) return "Out of play";
+  if (phase === "night" || phase === "day" || phase === "runoff") return "Your move";
+  if (phase === "ended") return "Resolved";
+  return "Stay with table";
+}
+
+function GameMomentHeader({ game, isDead }: { game: ClientGameView; isDead: boolean }) {
+  const acknowledged = game.you?.acknowledged ?? false;
+  return (
+    <header
+      data-testid="game-moment"
+      className="mx-auto w-full max-w-md px-4 pb-3"
+      aria-live="polite"
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-frame/70 pb-3">
+        <div className="min-w-0">
+          <p className="text-[0.62rem] uppercase tracking-[0.28em] text-smoke">
+            File day {game.day} · {isDead ? "Spectator" : game.phase}
+          </p>
+          <p className="file-heading mt-1 truncate text-xl text-bone">
+            {phaseHeading(game.phase)}
+          </p>
+        </div>
+        <span
+          className={`shrink-0 rounded-sm border px-2 py-1 text-[0.6rem] font-bold uppercase tracking-[0.12em] ${
+            isDead ? "border-blood/60 text-blood-hi" : "border-brass/60 text-brass-hi"
+          }`}
+        >
+          {phaseStatus(game.phase, isDead)}
+        </span>
+      </div>
+      <p className="mt-3 text-sm leading-relaxed text-paper/80">{phaseTask(game.phase, isDead, acknowledged)}</p>
+    </header>
+  );
 }
 
 export default function GameScreen({
@@ -130,7 +248,8 @@ export default function GameScreen({
       )}
 
       {/* Content stacks above the decorative z-0 ambiance wash. */}
-      <div className="relative z-10 flex flex-1 flex-col">
+      <div className="relative z-10 flex flex-1 flex-col pt-16">
+        <GameMomentHeader game={game} isDead={isDead} />
         {game.phase === "ended" ? (
           <GameEnd game={game} players={players} isHost={isHost} />
         ) : game.phase === "sunrise" || game.phase === "sunset" ? (

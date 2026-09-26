@@ -30,7 +30,11 @@ export default function GameEnd({
   const winners = game.winners ?? [];
 
   return (
-    <div data-testid="game-end" className="animate-rise flex flex-col gap-6 px-4 py-8 text-center">
+    <div
+      data-testid="game-end"
+      className="animate-rise flex min-h-[calc(100dvh-9rem)] flex-col gap-6 px-4 pb-8 pt-3 text-center"
+      aria-live="polite"
+    >
       <div className="flex flex-col items-center gap-3 py-2">
         <Stamp variant="case-closed" className="text-sm" />
         <p className="text-[0.6rem] uppercase tracking-[0.35em] text-smoke">
@@ -42,6 +46,9 @@ export default function GameEnd({
         >
           {winnerLabel(winners)}
         </h1>
+        <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-paper/80">
+          The table is resolved. Review every assignment before deciding whether to rematch.
+        </p>
       </div>
 
       <div>
@@ -82,8 +89,8 @@ export default function GameEnd({
           Open a new case
         </Button>
       ) : (
-        <p data-testid="waiting-for-host" className="text-sm text-smoke">
-          // awaiting the investigator to open a new case…
+        <p data-testid="waiting-for-host" className="mt-auto text-sm text-smoke">
+          // awaiting the investigator to open a new case. Stay at the table.
         </p>
       )}
     </div>

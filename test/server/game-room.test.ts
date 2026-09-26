@@ -396,6 +396,8 @@ describe("create -> join -> snapshot", () => {
     expect(hostWelcome.you.isHost).toBe(true);
     expect(hostWelcome.state.roomCode).toBe(roomCode);
     expect(hostWelcome.state.phase).toBe("lobby");
+    expect(hostWelcome.state.visualTheme).toBe("atelier");
+    expect(hostWelcome.state.visualThemeRevision).toBe(0);
 
     const { ws: playerWs, welcome } = await joinAsPlayer(roomCode, "Alice");
     expect(welcome.you.isHost).toBe(false);
@@ -407,6 +409,8 @@ describe("create -> join -> snapshot", () => {
       isYou: true,
       connected: true,
     });
+    expect(welcome.state.visualTheme).toBe("atelier");
+    expect(welcome.state.visualThemeRevision).toBe(0);
 
     // Host receives a broadcast snapshot reflecting the new player. Skip
     // over the host's own post-hello snapshot (0 players) that precedes it.
@@ -460,6 +464,230 @@ describe("create -> join -> snapshot", () => {
     expect(rejoinWelcome.type).toBe("welcome");
     expect(rejoinWelcome.you.playerId).toBeDefined();
     rejoinWs.close();
+  });
+});
+
+describe("Spec 23 D1: room visual themes", () => {
+  test("host changes the public theme, synchronizes every snapshot, and preserves room state", async () => {
+    const game = await setUpFivePlayerRoom();
+    const stub = await stubFor(game.roomCode);
+
+    const before = await runInDurableObject(stub, async (_instance, state) =>
+      state.storage.get<{ phase: string; visualTheme?: string; visualThemeRevision?: number; lastActivityAt: number }>("room"),
+    );
+    expect(before).toMatchObject({ phase: "lobby", visualTheme: "atelier", visualThemeRevision: 0 });
+
+    sendGame(game.hostWs, { type: "set_visual_theme", visualTheme: "club" });
+    const afterChange = await drainSnapshots(game);
+    for (const state of Object.values(afterChange)) {
+      expect(state.visualTheme).toBe("club");
+      expect(state.visualThemeRevision).toBe(1);
+      expect(state.phase).toBe("lobby");
+    }
+
+    const after = await runInDurableObject(stub, async (_instance, state) =>
+      state.storage.get<{ phase: string; visualTheme?: string; visualThemeRevision?: number; lastActivityAt: number }>("room"),
+    );
+    expect(after).toMatchObject({ phase: "lobby", visualTheme: "club", visualThemeRevision: 1 });
+    expect(after?.lastActivityAt).toBeGreaterThanOrEqual(before?.lastActivityAt ?? 0);
+
+    // Re-selecting the active value is a no-op: no revision, storage write,
+    // or broadcast is produced.
+    sendGame(game.hostWs, { type: "set_visual_theme", visualTheme: "club" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const unchanged = await runInDurableObject(stub, async (_instance, state) =>
+      state.storage.get<{ phase: string; visualTheme?: string; visualThemeRevision?: number; lastActivityAt: number }>("room"),
+    );
+    expect(unchanged).toEqual(after);
+    for (const ws of [game.hostWs, game.angel.ws, game.villager1.ws, game.detective.ws, game.villager2.ws, game.mafia.ws]) {
+      expect(queueFor(ws).messages).toHaveLength(0);
+    }
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("rejects unknown themes, players, and in-game changes without mutation", async () => {
+    const game = await setUpFivePlayerRoom();
+    const stub = await stubFor(game.roomCode);
+
+    sendGame(game.hostWs, { type: "set_visual_theme", visualTheme: "unknown" } as unknown as ClientMessage);
+    expect((await nextMessageOfType(game.hostWs, "rejection")).code).toBe("invalid_visual_theme");
+
+    sendGame(game.villager1.ws, { type: "set_visual_theme", visualTheme: "rain" });
+    expect((await nextMessageOfType(game.villager1.ws, "rejection")).code).toBe("not_host");
+
+    const lobbyMeta = await runInDurableObject(stub, async (_instance, state) =>
+      state.storage.get<{ phase: string; visualTheme?: string; visualThemeRevision?: number }>("room"),
+    );
+    expect(lobbyMeta).toMatchObject({ phase: "lobby", visualTheme: "atelier", visualThemeRevision: 0 });
+
+    await startScriptedGame(game);
+    sendGame(game.hostWs, { type: "set_visual_theme", visualTheme: "rain" });
+    expect((await nextMessageOfType(game.hostWs, "rejection")).code).toBe("not_lobby");
+
+    const gameMeta = await runInDurableObject(stub, async (_instance, state) =>
+      state.storage.get<{ phase: string; visualTheme?: string; visualThemeRevision?: number }>("room"),
+    );
+    expect(gameMeta).toMatchObject({ phase: "night", visualTheme: "atelier", visualThemeRevision: 0 });
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("legacy or malformed metadata falls back to Atelier, and two host tabs converge on the committed revision", async () => {
+    const { roomCode, hostKey } = await createRoom();
+    const hostOne = await openSocket(roomCode);
+    send(hostOne, { type: "hello", auth: { kind: "host", hostKey } });
+    await nextMessageOfType(hostOne, "welcome");
+
+    const stub = await stubFor(roomCode);
+    await runInDurableObject(stub, async (_instance, state) => {
+      const room = await state.storage.get<Record<string, unknown>>("room");
+      const legacy = { ...room };
+      delete legacy.visualTheme;
+      delete legacy.visualThemeRevision;
+      await state.storage.put("room", legacy);
+    });
+
+    let hostTwo = await openSocket(roomCode);
+    send(hostTwo, { type: "hello", auth: { kind: "host", hostKey } });
+    const legacyWelcome = await nextMessageOfType(hostTwo, "welcome");
+    expect(legacyWelcome.state.visualTheme).toBe("atelier");
+    expect(legacyWelcome.state.visualThemeRevision).toBe(0);
+    await nextMessageOfType(hostOne, "snapshot");
+
+    // A malformed pair follows the same single fallback path as an absent
+    // legacy pair. Reconnect the second host so the assertion uses a fresh
+    // authoritative welcome rather than a locally cached value.
+    hostTwo.close();
+    await nextMessageOfType(hostOne, "snapshot");
+    await runInDurableObject(stub, async (_instance, state) => {
+      const room = await state.storage.get<Record<string, unknown>>("room");
+      await state.storage.put("room", { ...room, visualTheme: "bogus", visualThemeRevision: -4 });
+    });
+    hostTwo = await openSocket(roomCode);
+    send(hostTwo, { type: "hello", auth: { kind: "host", hostKey } });
+    const malformedWelcome = await nextMessageOfType(hostTwo, "welcome");
+    expect(malformedWelcome.state.visualTheme).toBe("atelier");
+    expect(malformedWelcome.state.visualThemeRevision).toBe(0);
+    await nextMessageOfType(hostOne, "snapshot");
+
+    send(hostOne, { type: "set_visual_theme", visualTheme: "club" });
+    const firstCommit = await Promise.all([
+      nextMessageOfType(hostOne, "snapshot"),
+      nextMessageOfType(hostTwo, "snapshot"),
+    ]);
+    expect(firstCommit.map((message) => message.state.visualTheme)).toEqual(["club", "club"]);
+    expect(firstCommit.map((message) => message.state.visualThemeRevision)).toEqual([1, 1]);
+
+    send(hostTwo, { type: "set_visual_theme", visualTheme: "rain" });
+    const secondCommit = await Promise.all([
+      nextMessageOfType(hostOne, "snapshot"),
+      nextMessageOfType(hostTwo, "snapshot"),
+    ]);
+    expect(secondCommit.map((message) => message.state.visualTheme)).toEqual(["rain", "rain"]);
+    expect(secondCommit.map((message) => message.state.visualThemeRevision)).toEqual([2, 2]);
+
+    const finalMeta = await runInDurableObject(stub, async (_instance, state) =>
+      state.storage.get<{ visualTheme?: string; visualThemeRevision?: number }>("room"),
+    );
+    expect(finalMeta).toMatchObject({ visualTheme: "rain", visualThemeRevision: 2 });
+
+    hostOne.close();
+    hostTwo.close();
+  });
+
+  test("theme and revision survive an in-game rejoin and the rematch reset", async () => {
+    const game = await setUpFivePlayerRoom();
+    sendGame(game.hostWs, { type: "set_visual_theme", visualTheme: "rain" });
+    const lobby = await drainSnapshots(game);
+    expect(lobby.detective).toMatchObject({ visualTheme: "rain", visualThemeRevision: 1 });
+
+    const started = await startScriptedGame(game);
+    expect(started.detective).toMatchObject({ visualTheme: "rain", visualThemeRevision: 1 });
+
+    const rejoin = await openSocket(game.roomCode);
+    send(rejoin, { type: "hello", auth: { kind: "seat", seatToken: game.detective.seatToken } });
+    const rejoinWelcome = await nextMessageOfType(rejoin, "welcome");
+    expect(rejoinWelcome.state).toMatchObject({ visualTheme: "rain", visualThemeRevision: 1 });
+    await Promise.all([
+      nextMessageOfType(game.hostWs, "snapshot"),
+      nextMessageOfType(game.angel.ws, "snapshot"),
+      nextMessageOfType(game.villager1.ws, "snapshot"),
+      nextMessageOfType(game.detective.ws, "snapshot"),
+      nextMessageOfType(game.villager2.ws, "snapshot"),
+      nextMessageOfType(game.mafia.ws, "snapshot"),
+    ]);
+    // The existing game-room lifecycle path is the authoritative rematch
+    // transition; force the persisted game to ended to keep this test focused
+    // on metadata preservation rather than replaying a full match.
+    const stub = await stubFor(game.roomCode);
+    await runInDurableObject(stub, async (_instance, state) => {
+      const current = await state.storage.get<Record<string, unknown>>("game");
+      await state.storage.put("game", { ...current, phase: "ended" });
+    });
+    sendGame(game.hostWs, { type: "new_game" });
+    const afterRematch = await drainSnapshots(game);
+    expect(afterRematch.detective).toMatchObject({ phase: "lobby", visualTheme: "rain", visualThemeRevision: 1 });
+    rejoin.close();
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
+  test("overlapping host commits retain both the revision and the last committed metadata", async () => {
+    const { roomCode, hostKey } = await createRoom();
+    const hostOne = await openSocket(roomCode);
+    send(hostOne, { type: "hello", auth: { kind: "host", hostKey } });
+    await nextMessageOfType(hostOne, "welcome");
+
+    const hostTwo = await openSocket(roomCode);
+    send(hostTwo, { type: "hello", auth: { kind: "host", hostKey } });
+    await nextMessageOfType(hostTwo, "welcome");
+    await nextMessageOfType(hostOne, "snapshot");
+
+    // Both WebSocket messages are sent before either caller has a chance to
+    // finish its post-commit broadcast. The two storage transactions must
+    // commit revisions 1 and 2; an older nontransactional activity write
+    // would be able to put revision 1 back over revision 2 here.
+    send(hostOne, { type: "set_visual_theme", visualTheme: "club" });
+    send(hostTwo, { type: "set_visual_theme", visualTheme: "rain" });
+    const frames = await Promise.all([
+      nextMessageOfType(hostOne, "snapshot"),
+      nextMessageOfType(hostOne, "snapshot"),
+      nextMessageOfType(hostTwo, "snapshot"),
+      nextMessageOfType(hostTwo, "snapshot"),
+    ]);
+
+    const highestFrame = frames.reduce((highest, frame) =>
+      frame.state.visualThemeRevision > highest.state.visualThemeRevision ? frame : highest,
+    );
+    expect(highestFrame.state.visualThemeRevision).toBe(2);
+
+    const stub = await stubFor(roomCode);
+    const finalMeta = await runInDurableObject(stub, async (_instance, state) =>
+      state.storage.get<{ visualTheme?: string; visualThemeRevision?: number; lastActivityAt?: number }>("room"),
+    );
+    expect(finalMeta).toMatchObject({
+      visualTheme: highestFrame.state.visualTheme,
+      visualThemeRevision: 2,
+    });
+
+    hostOne.close();
+    hostTwo.close();
   });
 });
 

@@ -399,7 +399,9 @@ test.describe("start gate + role-count editor (Spec 11 Feature 4, Spec 13 live p
     await hostPage.getByTestId("role-count-detective-inc").click();
     await expect(hostPage.getByTestId("role-count-detective-value")).toHaveText("3");
     await expect(startBtn).toBeDisabled();
-    await expect(startBtn).toHaveText("Role counts must equal player count.");
+    await expect(hostPage.getByTestId("start-blocked-reason")).toHaveText(
+      "Role counts must equal player count.",
+    );
     const resetBtn = hostPage.getByTestId("reset-to-suggested");
     await expect(resetBtn).toBeVisible();
 

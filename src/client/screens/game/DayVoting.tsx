@@ -50,7 +50,10 @@ export default function DayVoting({
   const myVoteName = myVote === "no_murder" ? "No murder this round" : myVote ? (playerNames.get(myVote) ?? myVote) : null;
 
   return (
-    <div className="animate-rise flex flex-col gap-6 px-4 py-6" data-testid="day-voting">
+    <div
+      className="animate-rise flex min-h-[calc(100dvh-9rem)] flex-col gap-5 px-4 pb-8 pt-3"
+      data-testid="day-voting"
+    >
       <div className="text-center">
         <p className="text-[0.6rem] uppercase tracking-[0.35em] text-smoke">
           Interrogation · File Day {game.day}
@@ -58,6 +61,11 @@ export default function DayVoting({
         <h1 className="file-heading text-3xl text-bone">
           {isRunoff ? "The Runoff" : "Name a suspect"}
         </h1>
+        <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-paper/80">
+          {isRunoff
+            ? "The tie is limited to the marked suspects. Choose one, then confirm."
+            : "Choose one living suspect, or record no murder, then confirm your ballot."}
+        </p>
       </div>
 
       {you?.investigationResults && you.investigationResults.length > 0 && (
@@ -107,7 +115,7 @@ export default function DayVoting({
         </p>
       ) : (
         <div className="flex flex-col gap-3">
-          <div className="grid grid-cols-1 gap-2" data-testid="vote-grid">
+          <div className="grid grid-cols-1 gap-2" data-testid="vote-grid" aria-label="Living suspects">
             {livingCandidates.map((c) => {
               const mine = myVote === c.id;
               const count = tallyFor(c.id);
@@ -119,6 +127,7 @@ export default function DayVoting({
                   data-target-id={c.id}
                   data-voted={mine}
                   data-locked={mine && locked}
+                  aria-pressed={mine}
                   disabled={locked}
                   onClick={() => vote(c.id)}
                   className={`flex min-h-11 items-center justify-between rounded-sm border px-4 py-3 text-left transition-colors disabled:opacity-60 ${
@@ -154,6 +163,18 @@ export default function DayVoting({
             />
           )}
 
+          {myVote !== null && !locked && (
+            <p
+              data-testid="vote-selection-status"
+              className="rounded-sm border border-brass/40 bg-ink-3 px-3 py-2 text-center text-sm text-brass-hi"
+              aria-live="polite"
+            >
+              {myVote === "no_murder"
+                ? "No murder selected. Confirm to file this ballot."
+                : `${myVoteName} selected. Confirm to file this ballot.`}
+            </p>
+          )}
+
           {/* Select → confirm. A tentative pick shows "Confirm accusation"
               (locks it); a locked pick shows "Reconsider" (returns to
               tentative). This is the day-vote analog of the night lock-in —
@@ -167,7 +188,9 @@ export default function DayVoting({
                     data-testid="vote-locked-state"
                     className="animate-brass-pulse rounded-sm border border-brass/60 bg-ink-3 p-3 text-center text-sm text-brass-hi"
                   >
-                    Accusation filed against {myVoteName}. Waiting on the rest of the room…
+                    {myVote === "no_murder"
+                      ? "No-murder ballot filed. Waiting on the rest of the room…"
+                      : `Accusation filed against ${myVoteName}. Waiting on the rest of the room…`}
                   </div>
                   <button
                     type="button"
@@ -209,7 +232,7 @@ export default function DayVoting({
       <div
         data-testid="vote-tally"
         data-mode={showTally ? "realtime" : "hidden"}
-        className="flex items-center justify-center gap-2 text-center text-sm text-smoke"
+        className="mt-auto flex items-center justify-center gap-2 text-center text-sm text-smoke"
       >
         {showTally ? (
           "Votes are visible in real time."
@@ -231,6 +254,7 @@ function NoMurderCard({ mine, locked, onVote }: { mine: boolean; locked: boolean
       data-testid="vote-option-no-murder"
       data-voted={mine}
       data-locked={mine && locked}
+      aria-pressed={mine}
       disabled={locked}
       onClick={onVote}
       className={`min-h-11 rounded-sm border-2 border-dashed px-4 py-3 text-center text-sm font-bold uppercase tracking-[0.1em] transition-colors disabled:opacity-60 ${

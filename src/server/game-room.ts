@@ -7,11 +7,13 @@ import type {
   ErrorCode,
   ServerMessage,
   StoryState,
+  VisualTheme,
 } from "../shared/protocol";
 import {
   CLOSE_AUTH_TIMEOUT,
   CLOSE_BAD_CREDENTIAL,
   CLOSE_KICKED,
+  isVisualTheme,
 } from "../shared/protocol";
 import {
   applyCommand,
@@ -55,6 +57,11 @@ interface RoomMeta {
   phase: string;
   createdAt: number;
   lastActivityAt: number;
+  /** Spec 23 D1. Optional on the interface because rooms claimed before the
+   * theme field existed may still be in storage; read through
+   * `readVisualTheme` before exposing or mutating these values. */
+  visualTheme?: VisualTheme;
+  visualThemeRevision?: number;
 }
 
 interface PlayerRecord {
@@ -79,6 +86,7 @@ type Attachment =
   | { kind: "player"; playerId: string; connectedAt: number };
 
 const ROOM_KEY = "room";
+const DEFAULT_VISUAL_THEME: VisualTheme = "atelier";
 const PLAYERS_KEY = "players";
 const PENDING_AUTH_KEY = "pendingAuth";
 const GAME_KEY = "game";
@@ -137,6 +145,26 @@ const ENDED_TTL_MS = 2 * 60 * 60 * 1000; // 2h
 const ABSOLUTE_TTL_MS = 6 * 60 * 60 * 1000; // 6h
 
 const RESERVED_CLOSE_CODES = new Set([1005, 1006, 1015]);
+
+/** Normalize the one piece of legacy room metadata that predates Spec 23.
+ * This is the only fallback path: snapshots always carry a valid theme and a
+ * nonnegative integer revision, and a malformed stored value cannot leak into
+ * the client protocol. */
+function readVisualTheme(room: RoomMeta): {
+  visualTheme: VisualTheme;
+  visualThemeRevision: number;
+} {
+  const storedRevision = room.visualThemeRevision;
+  if (
+    !isVisualTheme(room.visualTheme) ||
+    typeof storedRevision !== "number" ||
+    !Number.isSafeInteger(storedRevision) ||
+    storedRevision < 0
+  ) {
+    return { visualTheme: DEFAULT_VISUAL_THEME, visualThemeRevision: 0 };
+  }
+  return { visualTheme: room.visualTheme, visualThemeRevision: storedRevision };
+}
 
 function normalizeCloseCode(code: number): number {
   return code >= 1000 && code < 5000 && !RESERVED_CLOSE_CODES.has(code)
@@ -286,6 +314,8 @@ export class GameRoom extends DurableObject<Env> {
       phase: "lobby",
       createdAt: now,
       lastActivityAt: now,
+      visualTheme: DEFAULT_VISUAL_THEME,
+      visualThemeRevision: 0,
     };
     await this.ctx.storage.put(ROOM_KEY, room);
     await this.ctx.storage.put(PLAYERS_KEY, [] as PlayerRecord[]);
@@ -454,6 +484,9 @@ export class GameRoom extends DurableObject<Env> {
         return;
       case "set_ruleset":
         await this.handleSetRuleset(ws, attachment, parsed);
+        return;
+      case "set_visual_theme":
+        await this.handleSetVisualTheme(ws, attachment, parsed);
         return;
       case "lock_action":
         await this.handleGameCommand(ws, attachment, (playerId) => ({
@@ -841,6 +874,58 @@ export class GameRoom extends DurableObject<Env> {
     }
     await this.ctx.storage.put(PENDING_RULESET_KEY, ruleset);
     await this.touchAndBroadcast({ skipActivity: true });
+  }
+
+  /** Spec 23 D1. Host-only, lobby-only: persist one public room theme and
+   * broadcast its authoritative revision. The storage transaction gates the
+   * read/modify/write, so two host tabs cannot commit the same revision. */
+  private async handleSetVisualTheme(
+    ws: WebSocket,
+    attachment: Attachment,
+    msg: Extract<ClientMessage, { type: "set_visual_theme" }>,
+  ): Promise<void> {
+    if (attachment.kind !== "host") {
+      this.sendRejection(ws, "not_host");
+      return;
+    }
+
+    const result = await this.ctx.storage.transaction(async (txn) => {
+      const room = await txn.get<RoomMeta>(ROOM_KEY);
+      if (!room || room.phase !== "lobby") {
+        return { kind: "rejection" as const, code: "not_lobby" };
+      }
+      if (!isVisualTheme(msg.visualTheme)) {
+        return { kind: "rejection" as const, code: "invalid_visual_theme" };
+      }
+
+      const current = readVisualTheme(room);
+      if (current.visualTheme === msg.visualTheme) {
+        return { kind: "unchanged" as const };
+      }
+
+      await txn.put(ROOM_KEY, {
+        ...room,
+        visualTheme: msg.visualTheme,
+        visualThemeRevision: current.visualThemeRevision + 1,
+        // Activity is part of the same transaction as the theme revision.
+        // The broadcast below deliberately skips its legacy whole-meta write
+        // so a second host tab cannot commit a newer theme and then have that
+        // value overwritten by a stale activity update.
+        lastActivityAt: Date.now(),
+      } satisfies RoomMeta);
+      return { kind: "changed" as const };
+    });
+
+    if (result.kind === "rejection") {
+      this.sendRejection(ws, result.code);
+      return;
+    }
+    if (result.kind === "changed") {
+      // Theme changes count as room activity via the transaction above. The
+      // broadcast must not write RoomMeta again after another host tab has
+      // committed a newer revision.
+      await this.touchAndBroadcast({ skipActivity: true });
+    }
   }
 
   /** Player-issued in-game commands (`submitAction`/`castVote`/
@@ -1527,6 +1612,7 @@ export class GameRoom extends DurableObject<Env> {
     // only; a pending draft never rides here (it's ephemeral, delivered via
     // `story_draft` instead).
     const story = viewer.kind === "host" ? await this.getStoryState() : null;
+    const visualTheme = readVisualTheme(room);
 
     return {
       roomCode: room.code,
@@ -1534,6 +1620,8 @@ export class GameRoom extends DurableObject<Env> {
       players: views,
       hostConnected,
       createdAt: room.createdAt,
+      visualTheme: visualTheme.visualTheme,
+      visualThemeRevision: visualTheme.visualThemeRevision,
       game: gameView,
       pendingRuleset: pendingRuleset as ClientRoomState["pendingRuleset"],
       story,

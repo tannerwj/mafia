@@ -7,7 +7,7 @@
 // (300ms fade), and is never read for any game-logic decision.
 import { toast } from "sonner";
 import { create } from "zustand";
-import type { BeatId, ClientMessage, ClientRoomState, ErrorMessage, Tone } from "../../shared/protocol";
+import type { BeatId, ClientMessage, ClientRoomState, ErrorMessage, Tone, VisualTheme } from "../../shared/protocol";
 import type { Phase } from "../../shared/game-view";
 import type { Auth, ConnectionStatus, WelcomeInfo } from "../net/RoomConnection";
 import { RoomConnection } from "../net/RoomConnection";
@@ -43,6 +43,29 @@ const REJECTION_COPY: Record<string, string> = {
 
 function rejectionMessage(code: string): string {
   return REJECTION_COPY[code] ?? `Rejected: ${code}`;
+}
+
+/** A broadcast may be queued behind another host tab's theme change. Keep the
+ * newest room-wide theme revision while still applying the rest of the newer
+ * game snapshot normally. Room code is part of the comparison so a newly
+ * entered room can start at revision zero without inheriting an old room's
+ * visual skin. */
+function keepLatestVisualTheme(
+  current: ClientRoomState | null,
+  incoming: ClientRoomState,
+): ClientRoomState {
+  if (
+    !current ||
+    current.roomCode !== incoming.roomCode ||
+    incoming.visualThemeRevision >= current.visualThemeRevision
+  ) {
+    return incoming;
+  }
+  return {
+    ...incoming,
+    visualTheme: current.visualTheme,
+    visualThemeRevision: current.visualThemeRevision,
+  };
 }
 
 /** Spec 15. Human copy for `story_error` codes — surfaced in the draft panel,
@@ -145,17 +168,21 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
         if (info.seatToken) {
           conn.setAuth({ kind: "seat", seatToken: info.seatToken });
         }
-        set((s) => ({
-          room: info.state,
-          isHost: info.isHost,
-          playerId: info.playerId ?? s.playerId,
-          previousPhase: info.state.phase,
-          clockOffsetMs: info.serverNow - Date.now(),
-        }));
+        set((s) => {
+          const state = keepLatestVisualTheme(s.room, info.state);
+          return {
+            room: state,
+            isHost: info.isHost,
+            playerId: info.playerId ?? s.playerId,
+            previousPhase: state.phase,
+            clockOffsetMs: info.serverNow - Date.now(),
+          };
+        });
         hooks?.onWelcome?.(info);
       },
       onSnapshot: (state, serverNow) => {
         set((s) => {
+          const nextState = keepLatestVisualTheme(s.room, state);
           // Spec 15: a slow draft for a beat the game has since moved past
           // renders nowhere — drop it the moment phaseGen advances beyond
           // what the draft was generated for (mirrors the server's own
@@ -163,8 +190,8 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
           const currentGen = state.game?.phaseGen;
           const draftIsStale = s.storyDraft && currentGen !== undefined && currentGen !== s.storyDraft.phaseGen;
           return {
-            room: state,
-            previousPhase: s.room?.phase ?? state.phase,
+            room: nextState,
+            previousPhase: s.room?.phase ?? nextState.phase,
             clockOffsetMs: serverNow - Date.now(),
             storyDraft: draftIsStale ? null : s.storyDraft,
           };
@@ -265,6 +292,10 @@ export function acknowledge(gen: number): void {
 
 export function setRuleset(ruleset: unknown): void {
   useGameStore.getState().send({ type: "set_ruleset", ruleset });
+}
+
+export function setVisualTheme(visualTheme: VisualTheme): void {
+  useGameStore.getState().send({ type: "set_visual_theme", visualTheme });
 }
 
 export function lockAction(): void {

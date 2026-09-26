@@ -81,7 +81,8 @@ export default function Interstitial({
     <div
       data-testid="interstitial"
       data-phase={game.phase}
-      className="animate-rise flex min-h-[60dvh] flex-1 flex-col items-center justify-center gap-5 px-6"
+      className="animate-rise flex min-h-[calc(100dvh-9rem)] flex-1 flex-col items-center justify-center gap-5 px-6 pb-8 pt-3"
+      aria-live="polite"
     >
       {/* A typed case bulletin on a torn sheet. The torn top edge is a
           decorative pseudo-layer (pointer-events:none via .file-torn). */}
@@ -95,6 +96,9 @@ export default function Interstitial({
         <h1 className="file-heading mt-2 text-3xl leading-none text-bone">
           {heading}
         </h1>
+        <p className="mt-2 text-sm text-paper/80">
+          {isDawn ? (acked ? "Your report is filed." : "Read this report, then acknowledge it.") : "Stay with the table while the host closes the scene."}
+        </p>
         <div className="mx-auto my-4 h-px w-16 bg-frame" />
         <div data-testid="interstitial-lines" className="flex flex-col gap-2">
           {lines.length === 0 ? (

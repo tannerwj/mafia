@@ -18,7 +18,10 @@ export default function DeadGodView({
   const playerNames = new Map(players.map((p) => [p.id, p.name]));
 
   return (
-    <div data-testid="dead-god-view" className="animate-rise flex flex-col gap-6 px-4 py-6">
+    <div
+      data-testid="dead-god-view"
+      className="animate-rise flex min-h-[calc(100dvh-9rem)] flex-col gap-6 px-4 pb-8 pt-3"
+    >
       <div className="relative overflow-hidden rounded-sm border border-blood/60 bg-ink-2 px-4 pb-6 pt-12 text-center shadow-card">
         <Stamp variant="deceased" decorative className="absolute left-1/2 top-4 -translate-x-1/2 text-sm" />
         <p className="text-[0.6rem] uppercase tracking-[0.35em] text-smoke">
@@ -26,14 +29,17 @@ export default function DeadGodView({
         </p>
         <p className="file-heading mt-1 text-3xl text-blood-hi">You are deceased</p>
         <p className="mt-2 text-sm text-smoke">
-          // the full file is now open to you. Watch it close.
+          // you are out of play. The resolved file is now open to you.
         </p>
       </div>
 
       <div>
-        <p className="mb-2 text-[0.65rem] uppercase tracking-[0.2em] text-smoke">
-          The unsealed file — every subject
-        </p>
+        <div className="mb-2 flex items-baseline justify-between gap-3">
+          <p className="text-[0.65rem] uppercase tracking-[0.2em] text-smoke">
+            The unsealed file — every subject
+          </p>
+          <span className="shrink-0 text-xs tabular-nums text-smoke">{game.headcount.alive} alive</span>
+        </div>
         <ul className="flex flex-col gap-2" data-testid="dead-god-roles">
           {game.players.map((p) => {
             const copy = p.roleId ? roleCopyFor(p.roleId) : null;

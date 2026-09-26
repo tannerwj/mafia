@@ -34,8 +34,10 @@ export default function GameStatus({
       <button
         type="button"
         data-testid="game-status-button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
         onClick={() => setOpen(true)}
-        className="chip-inset-tl fixed z-60 flex h-11 items-center gap-2 rounded-sm border-2 border-frame bg-ink-2 px-3 text-[0.6rem] font-bold uppercase tracking-[0.15em] text-brass-hi shadow-lg"
+        className="chip-inset-tl fixed z-60 flex h-11 items-center gap-2 rounded-sm border-2 border-frame bg-ink-2 px-3 text-[0.65rem] font-bold uppercase tracking-[0.12em] text-brass-hi shadow-lg"
       >
         The Case So Far
       </button>

@@ -7,5 +7,13 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 // Object in workerd alongside the Vite client dev server (with HMR), and builds
 // both for `vite build`.
 export default defineConfig({
-  plugins: [react(), tailwindcss(), cloudflare()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    cloudflare(
+      process.env.MAFIA_E2E_STATE_DIR
+        ? { persistState: { path: process.env.MAFIA_E2E_STATE_DIR } }
+        : {},
+    ),
+  ],
 });

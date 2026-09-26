@@ -90,7 +90,7 @@ function StorytellerSetupDialog({ story, open, onOpenChange }: { story: StorySta
             </button>
 
             <label className="flex flex-col gap-1">
-              <span className="text-[0.65rem] uppercase tracking-[0.2em] text-smoke">Theme (optional)</span>
+              <span className="text-[0.65rem] uppercase tracking-[0.2em] text-smoke">Story setting (optional)</span>
               <input
                 data-testid="storyteller-theme-input"
                 value={theme}

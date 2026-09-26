@@ -19,14 +19,92 @@ import HostLog from "./HostLog";
 import NarratorBoard from "./NarratorBoard";
 import { legalBeatForPhase, StorytellerPanel, StorytellerSetupButton } from "./Storyteller";
 
+function nextActionCopy(game: ClientGameView, rows: ReturnType<typeof hostSeatRows>): string {
+  const active = rows.filter((row) => row.alive && !row.absent);
+  if (game.phase === "night") {
+    const pending = active.filter((row) => row.status.kind === "pending").length;
+    return pending > 0
+      ? "Let players finish their private action. Force advance if the table is stalled."
+      : "The room is ready for the night to resolve.";
+  }
+  if (game.phase === "day" || game.phase === "runoff") {
+    const pending = active.filter((row) => row.status.kind === "not-voted").length;
+    return pending > 0
+      ? "Let players confirm their ballots. Force advance if the table is stalled."
+      : "The room is ready for the vote to resolve.";
+  }
+  if (game.phase === "sunrise" || game.phase === "sunset") {
+    return "Narrate the scene aloud, then tap Reveal when the table is ready.";
+  }
+  if (game.phase === "dawn" || game.phase === "dusk") {
+    return "Let the report beat finish, or force advance if someone is waiting.";
+  }
+  return "Review the verdict, then open a rematch when the table is ready.";
+}
+
+function PhaseProgress({ game, rows }: { game: ClientGameView; rows: ReturnType<typeof hostSeatRows> }) {
+  const active = rows.filter((row) => row.alive && !row.absent);
+  const actors = active.filter((row) => row.status.kind === "acted" || row.status.kind === "pending");
+  const voters = active.filter((row) => row.status.kind === "voted" || row.status.kind === "not-voted");
+  const isNight = game.phase === "night";
+  const isVoting = game.phase === "day" || game.phase === "runoff";
+  const total = isNight ? actors.length : isVoting ? voters.length : 1;
+  const done = isNight
+    ? actors.filter((row) => row.status.kind === "acted").length
+    : isVoting
+      ? voters.filter((row) => row.status.kind === "voted").length
+      : game.phase === "sunrise" || game.phase === "sunset"
+        ? 0
+        : 1;
+  const label = isNight
+    ? `${done} of ${total} actions complete`
+    : isVoting
+      ? `${done} of ${total} ballots confirmed`
+      : game.phase === "sunrise" || game.phase === "sunset"
+        ? "Host reveal pending"
+        : "Scene beat in progress";
+
+  return (
+    <div data-testid="host-next-action" className="mt-3 rounded-sm border border-brass/40 bg-ink-3 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-[0.62rem] font-bold uppercase tracking-[0.2em] text-brass-hi">Next action</p>
+        <p className="text-right text-xs tabular-nums text-smoke">{label}</p>
+      </div>
+      <p className="mt-1 text-sm leading-relaxed text-paper/80">{nextActionCopy(game, rows)}</p>
+      {total > 1 && (
+        <div
+          className="mt-3 h-1.5 overflow-hidden rounded-full bg-ink"
+          role="progressbar"
+          aria-label={label}
+          aria-valuemin={0}
+          aria-valuemax={total}
+          aria-valuenow={done}
+        >
+          <div
+            className="h-full rounded-full bg-brass transition-[width] duration-300"
+            style={{ width: `${total === 0 ? 0 : Math.round((done / total) * 100)}%` }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PhaseHeader({ game, rows }: { game: ClientGameView; rows: ReturnType<typeof hostSeatRows> }) {
   return (
     <Card className="gap-1 px-4 py-3">
       <div className="flex items-center justify-between">
-        <p className="file-heading text-xl text-bone" data-testid="host-phase-label">
+        <p
+          className="file-heading text-xl text-bone"
+          data-testid="host-phase-label"
+          aria-live="polite"
+          aria-atomic="true"
+        >
           {phaseLabel(game.phase)} — Day {game.day}
         </p>
-        <DeadlineCountdown deadlineAt={game.deadlineAt} />
+        <span aria-live="off">
+          <DeadlineCountdown deadlineAt={game.deadlineAt} />
+        </span>
       </div>
       <p className="text-sm text-smoke" data-testid="host-phase-summary">
         <span aria-hidden className="mr-1 select-none">
@@ -34,6 +112,7 @@ function PhaseHeader({ game, rows }: { game: ClientGameView; rows: ReturnType<ty
         </span>
         {phaseSummary(game, rows)}
       </p>
+      <PhaseProgress game={game} rows={rows} />
     </Card>
   );
 }
@@ -177,7 +256,7 @@ export default function HostGame({ room, game }: { room: ClientRoomState; game: 
           className="w-full"
           onClick={() => setDrawerOpen(true)}
         >
-          Controls
+          Host controls
         </Button>
         <Drawer.Root open={drawerOpen} onOpenChange={setDrawerOpen}>
           <Drawer.Portal>

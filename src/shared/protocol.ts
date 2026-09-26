@@ -25,12 +25,27 @@ export interface ClientPlayerView {
   isYou: boolean;
 }
 
+/** Room-wide visual skin selected by the non-playing host. This is deliberately
+ * a closed, public enum: it is unrelated to the Storyteller's free-text
+ * narration setting and never carries role or faction information. */
+export type VisualTheme = "atelier" | "club" | "rain";
+
+export const VISUAL_THEMES = ["atelier", "club", "rain"] as const satisfies readonly VisualTheme[];
+
+export function isVisualTheme(value: unknown): value is VisualTheme {
+  return typeof value === "string" && (VISUAL_THEMES as readonly string[]).includes(value);
+}
+
 export interface ClientRoomState {
   roomCode: string;
   phase: "lobby" | EnginePhase;
   players: ClientPlayerView[];
   hostConnected: boolean;
   createdAt: number;
+  /** Public room skin and its monotonic server revision. Both are present on
+   * every welcome/snapshot, including legacy rooms and in-game rejoin. */
+  visualTheme: VisualTheme;
+  visualThemeRevision: number;
   game: ClientGameView | null;
   /** Spec 06 D1 / Spec 11: the host's pending lobby ruleset, broadcast so
    * players see the roster (counts only, not assignments) before the game
@@ -157,6 +172,14 @@ export interface SetRulesetMessage {
   ruleset: unknown;
 }
 
+/** Spec 23 D1. Host-only, lobby-only: change the public room-wide visual
+ * theme. The server validates the closed enum and increments the authoritative
+ * revision before broadcasting a snapshot. */
+export interface SetVisualThemeMessage {
+  type: "set_visual_theme";
+  visualTheme: VisualTheme;
+}
+
 /** Spec 08. Commits the sender's current tentative mafia-kill pick. Rejects
  * `no_pick_to_lock` if they have no target set, `not_lockable` if they're
  * not a living mafia-consensus killer during a night phase (including once
@@ -254,6 +277,7 @@ export type ClientMessage =
   | MarkAbsentMessage
   | MarkPresentMessage
   | SetRulesetMessage
+  | SetVisualThemeMessage
   | NewGameMessage
   | SetStorySettingsMessage
   | GenerateStoryMessage

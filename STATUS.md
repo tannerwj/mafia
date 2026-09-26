@@ -546,3 +546,25 @@ history above, and `CLAUDE.md` (operating rules + "process rules learned").
   production in another fresh room (`6QM5D`): PASS, village win and rematch;
   create 332ms, joins 549–638ms, start→night 116ms, last night input→dawn
   230ms, last vote→win 202ms. Each player/host has a separate browser context.
+
+## 2026-09-26 — Room-wide themes and UI refresh
+- Tanner chose a host-selected room look, shared by all phones, with distinct
+  art direction and the same controls. Approved Noir Atelier, Midnight Club,
+  and Neon Rain; Spec 23 and its design/plan record the decision.
+- Added authoritative visual theme + revision to room snapshots, host-only
+  lobby selection, storage persistence through rejoin/rematch, and stale-theme
+  handling for two host tabs. This is separate from the Storyteller narration
+  theme and does not change house rules or private projections.
+- Reworked Home, host/player lobbies, phase/next-action guidance, feedback,
+  and mobile theme styling. Real screenshots and ranked review findings are in
+  docs/reviews/2026-09-26-ui-themes.md. No external font/art dependencies.
+- Independent local gates: typecheck; 200 engine + 54 client + 140 server tests;
+  final 55/55 Playwright E2E on isolated port 5221/state; build and diff check.
+  Client JS gzip 130.19→134.46 KB; CSS gzip 7.08→10.45 KB.
+- Fresh review caught and fixed a two-host theme/activity write race, stale skin
+  during same-room SPA re-entry, a reduced-motion blank phase interval, and a
+  ticking countdown inside a screen-reader live region. The keyboard role-peek
+  E2E was intermittent once (54/55 first run); three isolated repeats and the
+  final full run passed without changing the test.
+- Production unchanged by this UI work; real-phone QR and accessibility/
+  playtest observations remain for human validation.

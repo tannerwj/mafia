@@ -39,7 +39,7 @@ export default function HostGameEnd({ room, game }: { room: ClientRoomState; gam
         <PrivacyChip />
       </div>
 
-      <div className="flex flex-col items-center gap-3 py-2 text-center">
+      <div className="flex flex-col items-center gap-3 py-2 text-center" aria-live="polite">
         <Stamp variant="case-closed" className="text-sm" />
         <p className="text-[0.6rem] uppercase tracking-[0.35em] text-smoke">File closed</p>
         <h2
@@ -48,6 +48,9 @@ export default function HostGameEnd({ room, game }: { room: ClientRoomState; gam
         >
           {winnerLabel(winners)}
         </h2>
+        <p className="max-w-md text-sm leading-relaxed text-paper/80">
+          The result is recorded. Review the assignments, then choose whether to return everyone to the lobby.
+        </p>
       </div>
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
@@ -88,6 +91,9 @@ export default function HostGameEnd({ room, game }: { room: ClientRoomState; gam
       >
         Open a new case
       </Button>
+      <p data-testid="rematch-description" className="-mt-4 text-center text-xs text-smoke">
+        A rematch keeps every seat and lets you choose the table look again.
+      </p>
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}

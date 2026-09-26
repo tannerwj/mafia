@@ -3,7 +3,6 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { InstructionsContent } from "../components/Instructions";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Separator } from "../components/ui/separator";
 import { HOUSE_ROLE_IDS, roleCopyFor } from "../lib/roleCopy";
 import { navigate } from "../useRoute";
 
@@ -75,7 +74,7 @@ function LandingExplainer() {
   return (
     <section
       data-testid="landing-explainer"
-      className="flex w-full max-w-2xl flex-col gap-10 px-2 pb-16 pt-4 text-paper"
+      className="home-explainer flex flex-col gap-10 pb-16 text-paper"
     >
       <div data-testid="landing-pitch" className="flex flex-col gap-3 text-center">
         <h2 className="file-heading text-lg tracking-[0.08em] text-brass-hi">
@@ -222,71 +221,98 @@ export default function Home() {
   }
 
   return (
-    <div className="flex w-full flex-col items-center bg-ink">
-      <main className="page-p relative z-10 mx-auto flex min-h-dvh w-full max-w-md flex-col items-center justify-center gap-9 bg-ink text-paper">
-      <div className="animate-rise flex flex-col items-center gap-3">
-        <p className="text-[0.7rem] uppercase tracking-[0.4em] text-smoke">
-          Case File No. 187
-        </p>
-        <h1 className="file-heading text-7xl leading-none text-blood-hi">MAFIA</h1>
-        <span className="stamp stamp-red text-[0.6rem]">Confidential</span>
-        <p className="mt-1 text-xs uppercase tracking-[0.2em] text-smoke">
-          a silent game for a loud table
-        </p>
-      </div>
-
-      <Button
-        onClick={createRoom}
-        disabled={creating}
-        data-testid="create-room"
-        variant="brass"
-        size="lg"
-        className="w-full max-w-xs"
+    <div className="home-page flex w-full flex-col items-center">
+      <main
+        data-testid="home-screen"
+        className="page-p relative z-10 flex min-h-dvh w-full flex-col items-center justify-center gap-8 text-paper"
       >
-        {creating ? "Opening file…" : "Open a new case"}
-      </Button>
+        <div className="home-hero">
+          <section className="home-brand" aria-labelledby="home-title">
+            <p className="text-[0.68rem] uppercase tracking-[0.32em] text-smoke">
+              Case File No. 187 · private table game
+            </p>
+            <h1 id="home-title" className="home-title">
+              MAF<span className="home-title-mark">I</span>A
+            </h1>
+            <span className="stamp stamp-red mt-4 text-[0.6rem]">Confidential</span>
+            <p className="home-lede">
+              A silent digital game master for a loud table. Your group talks in
+              the room; the app handles secret roles, tense nights, and fair votes.
+            </p>
+            <div className="home-meta" aria-label="Game features">
+              <span>No accounts</span>
+              <span>One host</span>
+              <span>Every player on a phone</span>
+            </div>
+          </section>
 
-      <div className="flex w-full max-w-xs items-center gap-3 text-smoke">
-        <Separator className="flex-1" />
-        <span className="text-[0.65rem] uppercase tracking-[0.3em]">or</span>
-        <Separator className="flex-1" />
-      </div>
+          <section className="home-action-card p-5 sm:p-6" aria-label="Start or join a game">
+            <div className="flex flex-col gap-4">
+              <div>
+                <p className="text-[0.65rem] uppercase tracking-[0.2em] text-brass-hi">
+                  Start at the table
+                </p>
+                <h2 className="mt-1 text-xl font-semibold text-bone">Create or join a room</h2>
+                <p className="mt-1 text-sm leading-relaxed text-paper/75">
+                  The host opens a room and shares the link. Everyone else enters the five-letter code.
+                </p>
+              </div>
 
-      <form
-        onSubmit={joinRoom}
-        className="flex w-full max-w-xs flex-col items-center gap-3"
-      >
-        <label
-          htmlFor="join-code"
-          className="text-xs uppercase tracking-[0.2em] text-smoke"
-        >
-          File reference number
-        </label>
-        <input
-          id="join-code"
-          data-testid="join-code-input"
-          value={joinCode}
-          onChange={(e) => setJoinCode(e.target.value)}
-          maxLength={5}
-          placeholder="ABCDE"
-          className="h-12 w-full rounded-md border border-frame bg-ink-2 px-3 text-center text-xl uppercase tracking-[0.3em] text-brass-hi placeholder:text-smoke/60 focus:border-brass focus:outline-none"
-        />
-        <Button
-          type="submit"
-          data-testid="join-room"
-          variant="outline"
-          disabled={checking}
-          className="w-full"
-        >
-          {checking ? "Checking the file…" : "Pull the file"}
-        </Button>
-      </form>
+              <Button
+                onClick={createRoom}
+                disabled={creating}
+                data-testid="create-room"
+                variant="brass"
+                size="lg"
+                className="w-full"
+              >
+                {creating ? "Opening file…" : "Open a new case"}
+              </Button>
 
-      {error && (
-        <p data-testid="home-error" role="alert" className="text-sm text-blood-hi">
-          {error}
-        </p>
-      )}
+              <div className="home-action-divider" aria-hidden="true">or</div>
+
+              <form onSubmit={joinRoom} className="flex flex-col gap-3">
+                <label htmlFor="join-code" className="text-xs uppercase tracking-[0.16em] text-smoke">
+                  Join with room code
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id="join-code"
+                    data-testid="join-code-input"
+                    value={joinCode}
+                    onChange={(e) => setJoinCode(e.target.value)}
+                    maxLength={5}
+                    autoCapitalize="characters"
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="ABCDE"
+                    aria-describedby="join-code-hint"
+                    className="h-12 min-w-0 flex-1 rounded-md border px-3 text-center text-xl uppercase tracking-[0.3em] text-brass-hi placeholder:text-smoke/60 focus:outline-none"
+                  />
+                  <Button
+                    type="submit"
+                    data-testid="join-room"
+                    variant="outline"
+                    disabled={checking}
+                    className="shrink-0 px-4"
+                  >
+                    {checking ? "Checking…" : "Join"}
+                  </Button>
+                </div>
+                <p id="join-code-hint" className="text-xs text-smoke">
+                  Ask the host for the code or scan their QR.
+                </p>
+              </form>
+
+              {error && (
+                <p data-testid="home-error" role="alert" className="text-sm text-blood-hi">
+                  {error}
+                </p>
+              )}
+            </div>
+          </section>
+        </div>
+
       </main>
       <LandingExplainer />
     </div>
