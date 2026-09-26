@@ -566,5 +566,31 @@ history above, and `CLAUDE.md` (operating rules + "process rules learned").
   ticking countdown inside a screen-reader live region. The keyboard role-peek
   E2E was intermittent once (54/55 first run); three isolated repeats and the
   final full run passed without changing the test.
-- Production unchanged by this UI work; real-phone QR and accessibility/
-  playtest observations remain for human validation.
+- Real-phone QR and accessibility/playtest observations remain for human
+  validation.
+
+## 2026-09-26 — Spec 23 production release and live verification
+- Deployed commit `15bd288` after clean-tree preflight, typecheck, 394 tests,
+  build, and Wrangler dry run. Worker version
+  `a6f52564-9ed1-4f5b-844c-c9e6032c56b6` is serving 100%. Pre-release
+  rollback version: `ba194580-f778-4b2a-9e2f-f3dfe1fb7767`.
+- Production HTML references the same JS/CSS hashes as `dist/client/index.html`:
+  `index-DCkix7fM.js` and `index-BHcg1KzB.css`.
+- `MAFIA_LIVE_BASE_URL=https://mafia.tannerwj.com node scripts/live-e2e.mjs`
+  passed with one separate host and five player contexts: room `EZW2D`,
+  night actions, host/detective reloads, private-projection checks, village
+  victory, and rematch. Create 360ms; join 525–707ms; start→night 110ms;
+  last night input→dawn 332ms; last vote→win 202ms.
+- Additional live browser checks in fresh rooms: host selection of Club,
+  Rain, and Atelier reached three independent player contexts in 98–200ms;
+  Rain persisted after player/host reload and into night (room `JPG6X`).
+  Five players completed a natural night to the sunrise hold in Club; one
+  real Workers AI Storyteller draft returned 345 characters in 2,829ms and
+  stayed absent from player screens (room `TZMG8`). This incurred one model
+  invocation plus normal Worker/DO requests.
+- Two exploratory Storyteller attempts stopped on test-driver assumptions:
+  the phone host keeps Force advance in the Host controls drawer, and forced
+  night progression intentionally skips the optional sunrise hold. The final
+  natural-path probe passed. No application fault was identified in those
+  attempts.
+- Real-device QR scanning, VoiceOver/TalkBack, and table playtest remain.
