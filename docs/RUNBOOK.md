@@ -2,6 +2,47 @@
 
 Spec 17. Two channels, two different jobs:
 
+## Release and rollback
+
+The Vite build produces both the Worker and static assets; Wrangler uses the
+redirected config in `dist/mafia_game/wrangler.json`. A Worker version captures
+those assets and bindings together. Durable Object storage is **not** rolled
+back, so inspect any schema/state changes before using an older version. The
+current deployment has no such state migration.
+
+```sh
+git status --short                 # require the intended clean commit
+npm run typecheck
+npm test
+npm run test:e2e                   # local, before release
+npm run build
+npx wrangler deployments list --json  # record active version ID
+npx wrangler deploy --dry-run --outdir /tmp/mafia-deploy-check
+npx wrangler deploy
+```
+
+After deployment, confirm `npx wrangler deployments list --json` names the
+new version at 100%, load `https://mafia.tannerwj.com/` and compare its JS/CSS
+hashes with `dist/client/index.html`, then run a fresh-room live multi-session
+game through rematch. This script is intentionally outside the default local
+suite and requires an explicit target because it creates a real room:
+
+```sh
+MAFIA_LIVE_BASE_URL=https://mafia.tannerwj.com node scripts/live-e2e.mjs
+```
+
+Stop and investigate a failed probe before creating more rooms. For an
+app-level regression, restore the **recorded pre-release version**
+and recheck the page and a fresh room:
+
+```sh
+npx wrangler rollback <PRE_RELEASE_VERSION_ID> --message "Rollback failed Mafia live verification"
+npx wrangler deployments list --json
+```
+
+The rollback changes the serving version; it does not undo room state created
+while the new version ran. See [Cloudflare's rollback limitations](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/).
+
 - **Structured logs** (`src/server/log.ts`'s `logEvent`) — one JSON line per
   event via `console.log`, captured by Cloudflare Workers Logs at
   `head_sampling_rate: 1` (every request, not sampled — traffic is tiny).

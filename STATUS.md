@@ -524,3 +524,25 @@ history above, and `CLAUDE.md` (operating rules + "process rules learned").
   Orchestrator gates: typecheck; 200 engine + 54 client + 135 server tests;
   53/53 Playwright E2E on port 5211 with isolated DO state; build; diff check.
   Client JS gzip 129.15→130.19 kB. Small-table pace remains an owner decision.
+
+## 2026-09-26 — Audit release and live multi-session game
+- User authorized deployment and a production E2E. Re-ran typecheck,
+  200 engine + 54 client + 135 server tests, build, and Wrangler dry-run
+  (15 assets; 113.51 KiB raw / 27.51 KiB gzip Worker upload). Previous active
+  Worker version: `07912be9-e4c9-4393-b7c8-8cc6b7ee87db`.
+- Deployed commit `16294e9` to `mafia.tannerwj.com`; active Cloudflare version
+  `ba194580-f778-4b2a-9e2f-f3dfe1fb7767` at 100%. Production HTML returned
+  200 and referenced the expected `index-0jc3u97n.js` and
+  `index-B69978FQ.css` assets. No migration or Cloudflare config edits.
+- Live UI playthrough used one host and five player browser contexts on 360px
+  viewports, real production role assignment (no test seed), host reload,
+  detective reload, night actions, a villager death, dead god view, raw
+  snapshot privacy checks, changed vote, village victory, and rematch. Final
+  fresh-room run passed in ~12s (room `Q5T3C`; contexts closed). Final night
+  input→dawn 332ms; final vote→win 304ms; create 449ms; joins 538–568ms.
+  Two earlier fresh-room attempts stopped on test-driver assumptions (role
+  label capitalization; role dialog after reload), not game failures.
+- Reusable opt-in `scripts/live-e2e.mjs` added and independently run against
+  production in another fresh room (`6QM5D`): PASS, village win and rematch;
+  create 332ms, joins 549–638ms, start→night 116ms, last night input→dawn
+  230ms, last vote→win 202ms. Each player/host has a separate browser context.
