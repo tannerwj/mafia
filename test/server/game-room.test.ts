@@ -362,6 +362,22 @@ async function voteConfirmAll(
   return snap;
 }
 
+/** Confirm votes that were already cast. Kept separate from voteConfirmAll so
+ * callers that are setting up a fresh ballot continue to exercise cast +
+ * confirm, while a retry of an already-cast ballot does not wait for a
+ * broadcast that the idempotent engine correctly suppresses. */
+async function confirmVotes(
+  game: FivePlayerGame,
+  voters: readonly { ws: WebSocket; playerId: string }[],
+): Promise<Record<"angel" | "villager1" | "detective" | "villager2" | "mafia", ClientRoomState>> {
+  let snap!: Record<"angel" | "villager1" | "detective" | "villager2" | "mafia", ClientRoomState>;
+  for (const p of voters) {
+    sendGame(p.ws, { type: "confirm_vote" });
+    snap = await drainSnapshots(game);
+  }
+  return snap;
+}
+
 describe("claim protocol", () => {
   test("claim then second claim on the same DO returns taken", async () => {
     const roomCode = "AAAAA";
@@ -714,6 +730,71 @@ describe("bad credentials", () => {
 });
 
 describe("auth gating", () => {
+  test("malformed nested hello receives a protocol error instead of throwing", async () => {
+    const { roomCode } = await createRoom();
+    const ws = await openSocket(roomCode);
+    ws.send(JSON.stringify({ type: "hello" }));
+    const malformed = await nextMessageOfType(ws, "error");
+    expect(malformed.code).toBe("bad_message");
+
+    ws.send(JSON.stringify({ type: "submit_action", action: null }));
+    const malformedAction = await nextMessageOfType(ws, "error");
+    expect(malformedAction.code).toBe("bad_message");
+
+    // The malformed frame itself is recoverable while the socket is pending;
+    // a subsequent non-hello still follows the normal auth gate.
+    ws.send(JSON.stringify({ type: "ping" }));
+    const gated = await nextMessageOfType(ws, "error");
+    expect(gated.code).toBe("not_authenticated");
+    expect((await nextClose(ws)).code).toBe(4002);
+  });
+
+  test("oversized WebSocket frames are rejected before JSON parsing", async () => {
+    const { roomCode } = await createRoom();
+    const ws = await openSocket(roomCode);
+    const closed = nextClose(ws);
+    ws.send("x".repeat(17 * 1024));
+    const error = await nextMessageOfType(ws, "error");
+    expect(error.code).toBe("bad_message");
+    expect((await closed).code).toBe(1009);
+  });
+
+  test("bounds the pending authentication queue before accepting another socket", async () => {
+    const { roomCode } = await createRoom();
+    const pending: WebSocket[] = [];
+    for (let i = 0; i < 32; i++) pending.push(await openSocket(roomCode));
+
+    const overflow = await SELF.fetch(`https://example.com/api/rooms/${roomCode}/ws`, {
+      headers: { Upgrade: "websocket" },
+    });
+    expect(overflow.status).toBe(429);
+
+    for (const ws of pending) ws.close();
+  });
+
+  test("the 21st lobby seat is rejected while the supported 20-seat roster remains intact", async () => {
+    const { roomCode } = await createRoom();
+    const stub = await stubFor(roomCode);
+    await runInDurableObject(stub, async (_instance, state) => {
+      await state.storage.put("players", Array.from({ length: 20 }, (_, i) => ({
+        id: `p${i}`,
+        name: `Player${i}`,
+        seatToken: `token${i}`,
+        joinedAt: Date.now(),
+      })));
+    });
+
+    const ws = await openSocket(roomCode);
+    const closed = nextClose(ws);
+    ws.send(JSON.stringify({ type: "hello", auth: { kind: "join", name: "Overflow" } }));
+    const error = await nextMessageOfType(ws, "error");
+    expect(error.code).toBe("room_full");
+    expect((await closed).code).toBe(4002);
+
+    const players = await runInDurableObject(stub, async (_instance, state) => state.storage.get<unknown[]>("players"));
+    expect(players).toHaveLength(20);
+  });
+
   test("message before hello is rejected with 4002", async () => {
     const { roomCode } = await createRoom();
     const ws = await openSocket(roomCode);
@@ -1089,6 +1170,31 @@ describe("Spec 17 D4: alarm re-arm on WebSocket accept", () => {
   });
 });
 
+describe("Spec 17 D4: ended-game TTL scheduling", () => {
+  test("arms the 2h ended-room deadline when the room becomes idle", async () => {
+    const { roomCode, hostKey } = await createRoom();
+    const stub = await stubFor(roomCode);
+    const lastActivityAt = Date.now();
+    await runInDurableObject(stub, async (_instance, state) => {
+      const room = await state.storage.get<Record<string, unknown>>("room");
+      await state.storage.put("room", { ...room, phase: "ended", lastActivityAt });
+      await state.storage.deleteAlarm();
+    });
+
+    const ws = await openSocket(roomCode);
+    send(ws, { type: "hello", auth: { kind: "host", hostKey } });
+    await nextMessageOfType(ws, "welcome");
+    ws.close();
+    // Queue a DO request behind the close callback so its scheduler write is
+    // complete before reading the alarm slot.
+    await stub.fetch("https://do/internal/meta");
+
+    const alarm = await runInDurableObject(stub, async (_instance, state) => state.storage.getAlarm());
+    expect(alarm).not.toBeNull();
+    expect(alarm!).toBeLessThanOrEqual(lastActivityAt + 2 * 60 * 60 * 1000 + 1000);
+  });
+});
+
 describe("Spec 17 D4: storyRateLimit named constant + rematch reset", () => {
   test("storyRateLimit key is deleted on new_game (rematch)", async () => {
     const game = await setUpFivePlayerRoom();
@@ -1232,6 +1338,20 @@ describe("Spec 17 D3: POST /api/client-error", () => {
     expect(res.status).toBe(413);
   });
 
+  test("rejects an oversized unknown-length stream without reading it to completion", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("{" + '"message":"' + "x".repeat(9000) + '"}'));
+      },
+    });
+    const res = await SELF.fetch("https://example.com/api/client-error", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+    expect(res.status).toBe(413);
+  });
+
   test("rejects malformed JSON with 400", async () => {
     const res = await SELF.fetch("https://example.com/api/client-error", {
       method: "POST",
@@ -1248,6 +1368,33 @@ describe("Spec 17 D3: POST /api/client-error", () => {
       body: JSON.stringify({ url: "https://x", ua: "test-ua" }),
     });
     expect(res.status).toBe(400);
+  });
+
+  test("bounds and redacts diagnostic fields before logging", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const res = await SELF.fetch("https://example.com/api/client-error", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "forged",
+        message: "m".repeat(2200),
+        stackHead: "s".repeat(4500),
+        url: "https://example.com/room/ABCDE?token=secret#private",
+        roomCode: "AAAAI",
+        ua: "u".repeat(1000),
+      }),
+    });
+    expect(res.status).toBe(204);
+    const line = spy.mock.calls.map((c) => c[0] as string).find((entry) => entry.includes('"client_error"'));
+    expect(line).toBeDefined();
+    const parsed = JSON.parse(line!) as Record<string, unknown>;
+    expect(parsed.kind).toBe("unknown");
+    expect((parsed.message as string).length).toBe(2048);
+    expect((parsed.stackHead as string).length).toBe(4096);
+    expect(parsed.url).toBe("https://example.com/room/ABCDE");
+    expect(parsed.roomCode).toBeUndefined();
+    expect((parsed.ua as string).length).toBe(512);
+    spy.mockRestore();
   });
 });
 
@@ -1780,6 +1927,11 @@ describe("timer path and stale-alarm no-op", () => {
     const stalePastDue = Date.now() - 15_362_000; // mirrors the prod drift
     await runInDurableObject(stub, async (_instance, state) => {
       await state.storage.put("gameDeadlineAt", stalePastDue);
+      // The stale bookkeeping key alone does not prove that an alarm is
+      // armed. Keep the platform alarm slightly in the future so the test
+      // can force this exact callback through runDurableObjectAlarm without
+      // racing a background fire; alarm() reads the planted past-due key.
+      await state.storage.setAlarm(Date.now() + 60_000);
     });
 
     const ran = await runDurableObjectAlarm(stub);
@@ -2281,6 +2433,27 @@ describe("Spec 11: set_ruleset / pendingRuleset, confirm_vote, acknowledge", () 
     game.mafia.ws.close();
   });
 
+  test("set_ruleset rejects enum objects that would throw during coercion", async () => {
+    const game = await setUpFivePlayerRoom();
+    const malformed = {
+      ...FIVE_PLAYER_HOUSE_RULES,
+      mafiaConsensus: { toString: null },
+    };
+    sendGame(game.hostWs, { type: "set_ruleset", ruleset: malformed } as unknown as ClientMessage);
+    const error = (await nextMessageOfType(game.hostWs, "error")) as ErrorMessage;
+    expect(error.code).toBe("bad_message");
+
+    sendGame(game.hostWs, { type: "ping" });
+    expect((await nextMessageOfType(game.hostWs, "pong")).type).toBe("pong");
+
+    game.hostWs.close();
+    game.angel.ws.close();
+    game.villager1.ws.close();
+    game.detective.ws.close();
+    game.villager2.ws.close();
+    game.mafia.ws.close();
+  });
+
   test("set_ruleset is rejected once a game is running (not_lobby)", async () => {
     const game = await setUpFivePlayerRoom();
     await startScriptedGame(game);
@@ -2314,7 +2487,15 @@ describe("Spec 11: set_ruleset / pendingRuleset, confirm_vote, acknowledge", () 
     expect(snap.detective.game?.you?.currentVote).toBe(game.mafia.playerId);
     expect(snap.detective.game?.you?.dayVoteLocked).toBe(false);
 
-    const final = await voteConfirmAll(game, game.mafia.playerId, [
+    // The cast was already applied above. A duplicate cast is now an
+    // idempotent retry and must not broadcast a snapshot.
+    sendGame(game.detective.ws, { type: "cast_vote", target: game.mafia.playerId });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    for (const ws of [game.hostWs, game.angel.ws, game.villager1.ws, game.detective.ws, game.villager2.ws, game.mafia.ws]) {
+      expect(queueFor(ws).messages).toHaveLength(0);
+    }
+
+    const final = await confirmVotes(game, [
       game.angel,
       game.villager1,
       game.detective,

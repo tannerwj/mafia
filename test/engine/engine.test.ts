@@ -831,6 +831,62 @@ describe("engine core", () => {
     expect(t.phase).toBe("night");
   });
 
+  test("repeating the same unlocked submitAction is idempotent, while a locked retry re-opens the pick", () => {
+    let s = start(5, rules({ mafia: 1, detective: 1, angel: 1, villager: 2 }), 9);
+    const mafia = byRole(s, "mafia");
+    const target = s.players.find((p) => p.id !== mafia.id)!;
+
+    s = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: target.id }).state;
+    const logLength = s.log.length;
+    const retry = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: target.id });
+    expect(retry.rejection).toBeUndefined();
+    expect(retry.effects).toEqual([]);
+    expect(retry.state).toBe(s);
+    expect(retry.state.log).toHaveLength(logLength);
+
+    s = applyCommand(s, { type: "lockAction", playerId: mafia.id }).state;
+    const reopen = applyCommand(s, { type: "submitAction", playerId: mafia.id, targetId: target.id });
+    expect(reopen.rejection).toBeUndefined();
+    expect(reopen.state).not.toBe(s);
+    expect(reopen.state.mafiaVotes.find((v) => v.playerId === mafia.id)?.locked).toBe(false);
+  });
+
+  test("unchanged day and night command retries do not append history", () => {
+    let day = toDay(start(5, rules({ mafia: 1, villager: 4 }), 2));
+    const voter = day.players.find((p) => p.alive)!;
+    const target = day.players.find((p) => p.alive && p.id !== voter.id)!;
+
+    day = applyCommand(day, { type: "castVote", playerId: voter.id, target: target.id }).state;
+    const castLogLength = day.log.length;
+    const castRetry = applyCommand(day, { type: "castVote", playerId: voter.id, target: target.id });
+    expect(castRetry.state).toBe(day);
+    expect(castRetry.state.log).toHaveLength(castLogLength);
+
+    day = applyCommand(day, { type: "confirmVote", playerId: voter.id }).state;
+    const confirmRetry = applyCommand(day, { type: "confirmVote", playerId: voter.id });
+    expect(confirmRetry.state).toBe(day);
+
+    day = applyCommand(day, { type: "unconfirmVote", playerId: voter.id }).state;
+    const unconfirmRetry = applyCommand(day, { type: "unconfirmVote", playerId: voter.id });
+    expect(unconfirmRetry.state).toBe(day);
+
+    day = applyCommand(day, { type: "retractVote", playerId: voter.id }).state;
+    const retractRetry = applyCommand(day, { type: "retractVote", playerId: voter.id });
+    expect(retractRetry.state).toBe(day);
+
+    let night = start(5, rules({ mafia: 1, villager: 4 }), 2);
+    const mafia = byRole(night, "mafia");
+    const nightTarget = night.players.find((p) => p.id !== mafia.id)!;
+    night = applyCommand(night, { type: "submitAction", playerId: mafia.id, targetId: nightTarget.id }).state;
+    night = applyCommand(night, { type: "lockAction", playerId: mafia.id }).state;
+    const lockRetry = applyCommand(night, { type: "lockAction", playerId: mafia.id });
+    expect(lockRetry.state).toBe(night);
+
+    night = applyCommand(night, { type: "unlockAction", playerId: mafia.id }).state;
+    const unlockRetry = applyCommand(night, { type: "unlockAction", playerId: mafia.id });
+    expect(unlockRetry.state).toBe(night);
+  });
+
   test("lock-in: designated mode gates readiness on only the designated killer's lock; non-designated lock state is irrelevant", () => {
     let s = start(6, rules({ mafia: 2, villager: 4 }, { mafiaConsensus: "designated" }), 4);
     const dm = s.players.filter((p) => p.roleId === "mafia").sort((a, b) => a.seat - b.seat);

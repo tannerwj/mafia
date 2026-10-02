@@ -393,6 +393,7 @@ export type ErrorCode =
   | "bad_host_key"
   | "bad_seat_token"
   | "name_taken"
+  | "room_full"
   | "game_in_progress"
   | "invalid_name"
   | "not_host"

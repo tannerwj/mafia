@@ -231,6 +231,18 @@ describe("Spec 15: defensive output parsing", () => {
     const parsed = parseStoryOutput(raw);
     expect(parsed?.bibleUpdates).toEqual({ Alice: "The Skeptic" });
   });
+
+  test("bounds persona updates and treats prototype-shaped keys as data", () => {
+    const raw = {
+      response: JSON.stringify({
+        scene: "A scene.",
+        bibleUpdates: JSON.parse(`{"__proto__":"must not mutate the result","constructor":"must be ignored","Alice":"${"x".repeat(500)}"}`),
+      }),
+    };
+    const parsed = parseStoryOutput(raw);
+    expect(parsed?.bibleUpdates).toEqual({ Alice: "x".repeat(240) });
+    expect(Object.getPrototypeOf(parsed?.bibleUpdates)).toBe(Object.prototype);
+  });
 });
 
 describe("Spec 15: STORYTELLER_FAKE deterministic output", () => {

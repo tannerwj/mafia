@@ -47,6 +47,11 @@ describe("roomCodeFromPathname", () => {
     expect(roomCodeFromPathname("/")).toBeUndefined();
     expect(roomCodeFromPathname("/api/rooms")).toBeUndefined();
   });
+
+  test("returns undefined for malformed room paths while preserving not-found codes", () => {
+    expect(roomCodeFromPathname("/room/%ZZ")).toBeUndefined();
+    expect(roomCodeFromPathname("/room/AAAAI")).toBe("AAAAI");
+  });
 });
 
 describe("truncateStackHead", () => {
@@ -174,6 +179,19 @@ describe("installGlobalErrorHandlers", () => {
     expect(calls).toHaveLength(1);
     const parsed = JSON.parse(calls[0]![1]) as Record<string, unknown>;
     expect(parsed).toMatchObject({ kind: "onerror", message: "window blew up", roomCode: "ABCDE" });
+  });
+
+  test("redacts query and fragment data from global error URLs", () => {
+    const { win, fire } = makeFakeWindow("/room/ABCDE");
+    win.location.href = "https://x/room/ABCDE?token=secret#private";
+    const { beacon, calls } = makeBeacon(true);
+    const reporter = new ErrorReporter(beacon, makeFetch().fetchImpl);
+
+    installGlobalErrorHandlers(win, reporter);
+    fire("error", { message: "window blew up" });
+
+    const parsed = JSON.parse(calls[0]![1]) as Record<string, unknown>;
+    expect(parsed.url).toBe("https://x/room/ABCDE");
   });
 
   test("reports an unhandledrejection with the Error's message/stack", () => {

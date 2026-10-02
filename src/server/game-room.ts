@@ -128,6 +128,142 @@ const STORY_MAX_BYTES = 32 * 1024; // ~32KB cap (§Memory) via scene trimming
 // rest of per-game story bookkeeping.
 const STORY_RATE_LIMIT_KEY = "storyRateLimit";
 
+// App-level resource bounds. The Worker/DO platform has larger ceilings, but
+// these limits keep a single anonymous room from consuming unbounded seats,
+// pending handshakes, or message parse time. The socket limit leaves room for
+// host multi-tab use plus reconnect overlap around the 20-seat game cap.
+const MAX_PLAYERS = 20;
+const MAX_LIVE_SOCKETS = 64;
+const MAX_PENDING_SOCKETS = 32;
+const MAX_WS_FRAME_BYTES = 16 * 1024;
+const MAX_PROTOCOL_STRING_LENGTH = 256;
+const MAX_STORY_THEME_LENGTH = 512;
+const MAX_STORY_REQUEST_ID_LENGTH = 128;
+const WS_TEXT_ENCODER = new TextEncoder();
+
+const CLIENT_MESSAGE_TYPES = new Set([
+  "hello", "kick", "leave", "ping", "start_game", "submit_action", "cast_vote",
+  "retract_vote", "confirm_vote", "unconfirm_vote", "acknowledge", "lock_action",
+  "unlock_action", "force_advance", "reveal", "mark_absent", "mark_present",
+  "set_ruleset", "set_visual_theme", "new_game", "set_story_settings",
+  "generate_story", "discard_story",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function boundedString(value: unknown, max = MAX_PROTOCOL_STRING_LENGTH): value is string {
+  return typeof value === "string" && value.length <= max;
+}
+
+function safeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isBeatId(value: unknown): value is BeatId {
+  return value === "sunrise-hold" || value === "sunset-hold" || value === "morning-report" || value === "post-vote" || value === "epilogue";
+}
+
+function hasValidLobbyRulesetShape(value: unknown): boolean {
+  if (!isRecord(value) || !isRecord(value.roles) || !isRecord(value.timers)) return false;
+  const enumFields: Record<string, readonly string[]> = {
+    mafiaCountFormula: ["sqrt", "quarter"],
+    tiePolicy: ["runoff-then-peace", "no-murder", "random", "kill-all"],
+    dayVoteThreshold: ["plurality", "majority"],
+    mafiaConsensus: ["unanimous", "majority", "designated"],
+    revealOnDeath: ["full", "alignment", "none"],
+    parityRule: ["immediate", "elimination"],
+    votingVisibility: ["hidden", "realtime"],
+  };
+  for (const [field, allowed] of Object.entries(enumFields)) {
+    if (typeof value[field] !== "string" || !allowed.includes(value[field])) return false;
+  }
+  for (const field of ["firstNightKill", "noMurderOption", "scenePhases"]) {
+    if (typeof value[field] !== "boolean") return false;
+  }
+  if (typeof value.dawnDuskBeatMs !== "number" || !Number.isFinite(value.dawnDuskBeatMs)) return false;
+  for (const count of Object.values(value.roles)) {
+    if (count !== "auto" && !(typeof count === "number" && Number.isSafeInteger(count) && count >= 0)) return false;
+  }
+  for (const seconds of Object.values(value.timers)) {
+    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 5) return false;
+  }
+  return true;
+}
+
+/** Runtime boundary for untrusted WebSocket JSON. Shared protocol types are
+ * compile-time contracts only; this guard keeps malformed nested objects from
+ * reaching dispatch code that assumes their fields exist. */
+function parseClientMessage(value: unknown): ClientMessage | null {
+  if (!isRecord(value) || typeof value.type !== "string") return null;
+  switch (value.type) {
+    case "hello": {
+      if (!isRecord(value.auth) || typeof value.auth.kind !== "string") return null;
+      if (value.auth.kind === "host" && boundedString(value.auth.hostKey)) return { type: "hello", auth: { kind: "host", hostKey: value.auth.hostKey } };
+      if (value.auth.kind === "seat" && boundedString(value.auth.seatToken)) return { type: "hello", auth: { kind: "seat", seatToken: value.auth.seatToken } };
+      if (value.auth.kind === "join" && boundedString(value.auth.name)) return { type: "hello", auth: { kind: "join", name: value.auth.name } };
+      return null;
+    }
+    case "kick":
+    case "mark_absent":
+    case "mark_present":
+      return boundedString(value.playerId) ? { type: value.type, playerId: value.playerId } : null;
+    case "leave":
+    case "ping":
+    case "new_game":
+    case "retract_vote":
+    case "confirm_vote":
+    case "unconfirm_vote":
+    case "lock_action":
+    case "unlock_action":
+      return { type: value.type };
+    case "start_game":
+      if (!hasOwn(value, "ruleset")) return null;
+      if (hasOwn(value, "seed") && value.seed !== undefined) {
+        if (!safeInteger(value.seed)) return null;
+        return { type: "start_game", ruleset: value.ruleset, seed: value.seed };
+      }
+      return { type: "start_game", ruleset: value.ruleset };
+    case "submit_action":
+      if (!isRecord(value.action) || !(value.action.targetId === null || boundedString(value.action.targetId))) return null;
+      if (value.action.actionType !== undefined && !boundedString(value.action.actionType, 64)) return null;
+      return { type: "submit_action", action: { targetId: value.action.targetId, ...(value.action.actionType === undefined ? {} : { actionType: value.action.actionType }) } };
+    case "cast_vote":
+      return boundedString(value.target) ? { type: "cast_vote", target: value.target } : null;
+    case "acknowledge":
+      return safeInteger(value.gen) ? { type: "acknowledge", gen: value.gen } : null;
+    case "force_advance":
+      return safeInteger(value.gen) ? { type: "force_advance", gen: value.gen } : null;
+    case "reveal":
+      return safeInteger(value.gen) ? { type: "reveal", gen: value.gen } : null;
+    case "set_ruleset":
+      return hasOwn(value, "ruleset") && hasValidLobbyRulesetShape(value.ruleset) ? { type: "set_ruleset", ruleset: value.ruleset } : null;
+    case "set_visual_theme":
+      // Keep unknown string values on the typed path so the host handler can
+      // return its established `invalid_visual_theme` rejection. The runtime
+      // boundary still rejects non-strings and overlong payloads.
+      return boundedString(value.visualTheme, 32) ? { type: "set_visual_theme", visualTheme: value.visualTheme as VisualTheme } : null;
+    case "set_story_settings":
+      return typeof value.enabled === "boolean" && boundedString(value.theme, MAX_STORY_THEME_LENGTH) &&
+        (value.tone === "noir" || value.tone === "cozy" || value.tone === "horror" || value.tone === "comedy" || value.tone === "absurd")
+        ? { type: "set_story_settings", enabled: value.enabled, theme: value.theme, tone: value.tone }
+        : null;
+    case "generate_story":
+      return isBeatId(value.beat) && safeInteger(value.phaseGen) && boundedString(value.requestId, MAX_STORY_REQUEST_ID_LENGTH)
+        ? { type: "generate_story", beat: value.beat, phaseGen: value.phaseGen, requestId: value.requestId }
+        : null;
+    case "discard_story":
+      return boundedString(value.requestId, MAX_STORY_REQUEST_ID_LENGTH) ? { type: "discard_story", requestId: value.requestId } : null;
+    default:
+      return null;
+  }
+}
+
 const DEFAULT_STORY_STATE: StoryState = {
   enabled: false,
   settings: { theme: "", tone: "noir" },
@@ -197,6 +333,22 @@ function socketsFor(
     const attachment = sock.deserializeAttachment() as Attachment | null;
     return attachment !== null && predicate(attachment);
   });
+}
+
+interface PresenceSnapshot {
+  hostConnected: boolean;
+  connectedPlayerIds: Set<string>;
+}
+
+function presenceFromSockets(sockets: WebSocket[]): PresenceSnapshot {
+  const connectedPlayerIds = new Set<string>();
+  let hostConnected = false;
+  for (const sock of sockets) {
+    const attachment = sock.deserializeAttachment() as Attachment | null;
+    if (attachment?.kind === "host") hostConnected = true;
+    if (attachment?.kind === "player") connectedPlayerIds.add(attachment.playerId);
+  }
+  return { hostConnected, connectedPlayerIds };
 }
 
 /** A not-yet-committed story draft. Deliberately in-memory ONLY (never
@@ -270,6 +422,24 @@ export class GameRoom extends DurableObject<Env> {
       const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
       if (!room) {
         return new Response("Room not found", { status: 404 });
+      }
+
+      const sockets = liveSockets(this.ctx);
+      if (sockets.length >= MAX_LIVE_SOCKETS) {
+        return new Response("Room connection limit reached", {
+          status: 429,
+          headers: { "retry-after": "5" },
+        });
+      }
+      const pendingSockets = sockets.filter((sock) => {
+        const attachment = sock.deserializeAttachment() as Attachment | null;
+        return attachment?.kind === "pending";
+      }).length;
+      if (pendingSockets >= MAX_PENDING_SOCKETS) {
+        return new Response("Room authentication queue is full", {
+          status: 429,
+          headers: { "retry-after": "5" },
+        });
       }
 
       const { 0: client, 1: server } = new WebSocketPair();
@@ -372,9 +542,10 @@ export class GameRoom extends DurableObject<Env> {
    * that doesn't parse; never throws. */
   private peekMessageType(message: string | ArrayBuffer): string {
     if (typeof message !== "string") return "binary";
+    if (message.length > MAX_WS_FRAME_BYTES || WS_TEXT_ENCODER.encode(message).byteLength > MAX_WS_FRAME_BYTES) return "oversized";
     try {
       const parsed = JSON.parse(message) as { type?: unknown };
-      return typeof parsed?.type === "string" ? parsed.type : "unknown";
+      return typeof parsed?.type === "string" ? parsed.type.slice(0, MAX_PROTOCOL_STRING_LENGTH) : "unknown";
     } catch {
       return "unknown";
     }
@@ -384,25 +555,36 @@ export class GameRoom extends DurableObject<Env> {
     ws: WebSocket,
     message: string | ArrayBuffer,
   ): Promise<void> {
+    const frameBytes = typeof message === "string"
+      ? message.length > MAX_WS_FRAME_BYTES ? MAX_WS_FRAME_BYTES + 1 : WS_TEXT_ENCODER.encode(message).byteLength
+      : message.byteLength;
+    if (frameBytes > MAX_WS_FRAME_BYTES) {
+      this.sendError(ws, "bad_message", "Message is too large.");
+      ws.close(1009);
+      return;
+    }
     if (typeof message !== "string") {
       this.sendError(ws, "bad_message", "Binary frames are not supported.");
       return;
     }
 
-    let parsed: ClientMessage;
+    let raw: unknown;
     try {
-      parsed = JSON.parse(message) as ClientMessage;
+      raw = JSON.parse(message) as unknown;
     } catch {
       this.sendError(ws, "bad_message", "Malformed JSON.");
       return;
     }
 
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      typeof (parsed as { type?: unknown }).type !== "string"
-    ) {
+    if (!isRecord(raw) || typeof raw.type !== "string") {
       this.sendError(ws, "bad_message", "Malformed message.");
+      return;
+    }
+
+    const parsed = parseClientMessage(raw);
+    if (!parsed) {
+      if (CLIENT_MESSAGE_TYPES.has(raw.type)) this.sendError(ws, "bad_message", "Malformed message.");
+      else this.sendError(ws, "unknown_type", `Unknown message type: ${raw.type.slice(0, MAX_PROTOCOL_STRING_LENGTH)}`);
       return;
     }
 
@@ -630,6 +812,11 @@ export class GameRoom extends DurableObject<Env> {
     }
 
     const players = await this.getPlayers();
+    if (players.length >= MAX_PLAYERS) {
+      this.sendError(ws, "room_full", "This room already has 20 players.");
+      ws.close(CLOSE_AUTH_TIMEOUT);
+      return;
+    }
     const nameTaken = players.some(
       (p) => p.name.toLowerCase() === name.toLowerCase(),
     );
@@ -1536,6 +1723,9 @@ export class GameRoom extends DurableObject<Env> {
       if (room.phase === "lobby" && players.length === 0) {
         deadlines.push(room.lastActivityAt + EMPTY_LOBBY_TTL_MS);
       }
+      if (room.phase === "ended") {
+        deadlines.push(room.lastActivityAt + ENDED_TTL_MS);
+      }
       deadlines.push(room.lastActivityAt + ABSOLUTE_TTL_MS);
     }
 
@@ -1565,23 +1755,19 @@ export class GameRoom extends DurableObject<Env> {
 
   private async buildStateFor(
     viewer: { kind: "host" } | { kind: "player"; playerId: string },
+    presence?: PresenceSnapshot,
   ): Promise<ClientRoomState> {
     const room = await this.ctx.storage.get<RoomMeta>(ROOM_KEY);
     if (!room) {
       throw new Error("buildStateFor called with no room");
     }
     const players = await this.getPlayers();
-    const hostConnected =
-      socketsFor(this.ctx, (a) => a.kind === "host").length > 0;
+    const currentPresence = presence ?? presenceFromSockets(liveSockets(this.ctx));
 
     const views: ClientPlayerView[] = players.map((p) => ({
       id: p.id,
       name: p.name,
-      connected:
-        socketsFor(
-          this.ctx,
-          (a) => a.kind === "player" && a.playerId === p.id,
-        ).length > 0,
+      connected: currentPresence.connectedPlayerIds.has(p.id),
       isYou: viewer.kind === "player" && viewer.playerId === p.id,
     }));
 
@@ -1618,7 +1804,7 @@ export class GameRoom extends DurableObject<Env> {
       roomCode: room.code,
       phase: game ? game.phase : "lobby",
       players: views,
-      hostConnected,
+      hostConnected: currentPresence.hostConnected,
       createdAt: room.createdAt,
       visualTheme: visualTheme.visualTheme,
       visualThemeRevision: visualTheme.visualThemeRevision,
@@ -1649,7 +1835,9 @@ export class GameRoom extends DurableObject<Env> {
     }
 
     const serverNow = Date.now();
-    for (const sock of liveSockets(this.ctx)) {
+    const sockets = liveSockets(this.ctx);
+    const presence = presenceFromSockets(sockets);
+    for (const sock of sockets) {
       if (sock === opts?.excludeWs) {
         continue;
       }
@@ -1661,6 +1849,7 @@ export class GameRoom extends DurableObject<Env> {
         attachment.kind === "host"
           ? { kind: "host" }
           : { kind: "player", playerId: attachment.playerId },
+        presence,
       );
       this.send(sock, { type: "snapshot", state, serverNow });
     }

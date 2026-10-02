@@ -13,10 +13,78 @@ const ROOM_CODE_LENGTH = 5;
 // Spec 17 D3: client error reports. Plain route, NO DO involvement — this is
 // diagnostic-only, never touches game state or requires auth.
 const CLIENT_ERROR_MAX_BYTES = 8 * 1024;
+const CLIENT_ERROR_MESSAGE_MAX = 2 * 1024;
+const CLIENT_ERROR_STACK_MAX = 4 * 1024;
+const CLIENT_ERROR_URL_MAX = 2 * 1024;
+const CLIENT_ERROR_UA_MAX = 512;
 const MAX_CLAIM_ATTEMPTS = 5;
 
 const WS_ROUTE = /^\/api\/rooms\/([^/]+)\/ws$/;
 const ROOM_ROUTE = /^\/api\/rooms\/([^/]+)$/;
+const ROOM_CODE_PATTERN = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{5}$/;
+
+function decodeRoomCode(segment: string): string | null {
+  try {
+    const code = decodeURIComponent(segment).toUpperCase();
+    return ROOM_CODE_PATTERN.test(code) ? code : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readBodyUpTo(request: Request, maxBytes: number): Promise<string | null> {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) return text + decoder.decode();
+      bytes += chunk.value.byteLength;
+      if (bytes > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+  } catch {
+    return null;
+  }
+}
+
+function boundedString(value: unknown, maxBytes: number): string {
+  if (typeof value !== "string") return "";
+  return value.length > maxBytes ? value.slice(0, maxBytes) : value;
+}
+
+function diagnosticUrl(value: unknown): string {
+  const raw = boundedString(value, CLIENT_ERROR_URL_MAX);
+  if (!raw) return "";
+  try {
+    const url = new URL(raw, "https://mafia.invalid");
+    url.search = "";
+    url.hash = "";
+    // Preserve relative URLs as relative strings while removing query and
+    // fragment data that commonly carries tokens or user-entered text.
+    return raw.startsWith("/") ? `${url.pathname}${url.search}${url.hash}` : url.toString();
+  } catch {
+    const delimiters = [raw.indexOf("?"), raw.indexOf("#")].filter((index) => index >= 0);
+    const end = delimiters.length > 0 ? Math.min(...delimiters) : raw.length;
+    return raw.slice(0, Math.min(end, CLIENT_ERROR_URL_MAX));
+  }
+}
+
+function diagnosticRoomCode(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const code = value.toUpperCase();
+  return ROOM_CODE_PATTERN.test(code) ? code : undefined;
+}
+
+function diagnosticKind(value: unknown): string {
+  return value === "boundary" || value === "onerror" || value === "unhandledrejection" ? value : "unknown";
+}
 
 // Spec 16 D3: per-room invitation card + noindex. Matches the PAGE route
 // `/room/XXXXX` (not `/api/rooms/...`) — case-insensitive since the URL may
@@ -110,7 +178,8 @@ export default {
       if (request.headers.get("Upgrade") !== "websocket") {
         return new Response("Expected WebSocket upgrade", { status: 426 });
       }
-      const code = decodeURIComponent(wsMatch[1]!).toUpperCase();
+      const code = decodeRoomCode(wsMatch[1]!);
+      if (!code) return new Response("Invalid room code", { status: 400 });
       const stub = env.GAME_ROOMS.get(env.GAME_ROOMS.idFromName(code));
       // The DO's own /internal/ws handler is authoritative on room
       // existence (404s if unclaimed) — no need to pre-check here.
@@ -122,11 +191,12 @@ export default {
     // auth (it's diagnostic) — never echoes the body back.
     if (url.pathname === "/api/client-error" && request.method === "POST") {
       const contentLength = request.headers.get("content-length");
-      if (contentLength !== null && Number(contentLength) > CLIENT_ERROR_MAX_BYTES) {
+      const contentLengthNumber = contentLength === null ? null : Number(contentLength);
+      if (contentLengthNumber !== null && Number.isFinite(contentLengthNumber) && contentLengthNumber > CLIENT_ERROR_MAX_BYTES) {
         return new Response(null, { status: 413 });
       }
-      const bodyText = await request.text();
-      if (bodyText.length > CLIENT_ERROR_MAX_BYTES) {
+      const bodyText = await readBodyUpTo(request, CLIENT_ERROR_MAX_BYTES);
+      if (bodyText === null) {
         return new Response(null, { status: 413 });
       }
       let payload: { message?: unknown; stackHead?: unknown; url?: unknown; roomCode?: unknown; ua?: unknown; kind?: unknown };
@@ -142,13 +212,13 @@ export default {
       // boundary vs. window.onerror vs. unhandledrejection) — it's the
       // metric blob D2 asks for; defaults to "unknown" for a malformed/older
       // client payload rather than rejecting the whole report over it.
-      const kind = typeof payload.kind === "string" ? payload.kind : "unknown";
+      const kind = diagnosticKind(payload.kind);
       const fields = {
-        roomCode: typeof payload.roomCode === "string" ? payload.roomCode : undefined,
-        message: payload.message,
-        stackHead: typeof payload.stackHead === "string" ? payload.stackHead : "",
-        url: typeof payload.url === "string" ? payload.url : "",
-        ua: typeof payload.ua === "string" ? payload.ua : "",
+        roomCode: diagnosticRoomCode(payload.roomCode),
+        message: boundedString(payload.message, CLIENT_ERROR_MESSAGE_MAX),
+        stackHead: boundedString(payload.stackHead, CLIENT_ERROR_STACK_MAX),
+        url: diagnosticUrl(payload.url),
+        ua: boundedString(payload.ua, CLIENT_ERROR_UA_MAX),
       };
       logEvent("client_error", { ...fields, kind });
       // blobs[0] is the metric-name discriminator (matches the convention in
@@ -191,7 +261,8 @@ export default {
 
     const roomMatch = ROOM_ROUTE.exec(url.pathname);
     if (roomMatch && request.method === "GET") {
-      const code = decodeURIComponent(roomMatch[1]!).toUpperCase();
+      const code = decodeRoomCode(roomMatch[1]!);
+      if (!code) return json({ error: "invalid_room_code" }, 400);
       const stub = env.GAME_ROOMS.get(env.GAME_ROOMS.idFromName(code));
       const metaRes = await stub.fetch("https://do/internal/meta");
       const meta = (await metaRes.json()) as

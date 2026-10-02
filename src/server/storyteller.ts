@@ -204,6 +204,9 @@ export interface StoryOutput {
 }
 
 const MAX_SCENE_WORDS = 120; // hard trim ceiling — well past the 90-word ask, catches runaway output.
+const MAX_BIBLE_UPDATES = 8;
+const MAX_BIBLE_NAME_LENGTH = 80;
+const MAX_BIBLE_PERSONA_LENGTH = 240;
 
 function stripThinkBlocks(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
@@ -245,14 +248,17 @@ export function parseStoryOutput(rawResult: unknown): StoryOutput | null {
   try {
     const parsed = JSON.parse(candidate) as { scene?: unknown; bibleUpdates?: unknown };
     if (typeof parsed.scene !== "string" || !parsed.scene.trim()) return null;
-    const bibleUpdates: Record<string, string> =
-      parsed.bibleUpdates && typeof parsed.bibleUpdates === "object"
-        ? Object.fromEntries(
-            Object.entries(parsed.bibleUpdates as Record<string, unknown>).filter(
-              (entry): entry is [string, string] => typeof entry[1] === "string",
-            ),
-          )
-        : {};
+    const boundedEntries: [string, string][] = [];
+    if (parsed.bibleUpdates && typeof parsed.bibleUpdates === "object" && !Array.isArray(parsed.bibleUpdates)) {
+      for (const [name, persona] of Object.entries(parsed.bibleUpdates as Record<string, unknown>)) {
+        if (boundedEntries.length >= MAX_BIBLE_UPDATES) break;
+        if (typeof persona !== "string") continue;
+        const boundedName = name.trim().slice(0, MAX_BIBLE_NAME_LENGTH);
+        if (!boundedName || boundedName === "__proto__" || boundedName === "constructor" || boundedName === "prototype") continue;
+        boundedEntries.push([boundedName, persona.trim().slice(0, MAX_BIBLE_PERSONA_LENGTH)]);
+      }
+    }
+    const bibleUpdates = Object.fromEntries(boundedEntries);
     return { scene: hardTrimWords(parsed.scene), bibleUpdates };
   } catch {
     // Not valid JSON at all (a model ignoring the format instruction) — fall

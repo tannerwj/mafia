@@ -65,4 +65,11 @@ describe("D3: per-room invitation card", () => {
     const body = (await res.json()) as { exists: boolean };
     expect(body.exists).toBe(false);
   });
+
+  test("malformed or off-alphabet room codes return 400 without a DO lookup", async () => {
+    const malformed = await SELF.fetch("https://example.com/api/rooms/%ZZ");
+    expect(malformed.status).toBe(400);
+    const offAlphabet = await SELF.fetch("https://example.com/api/rooms/AAAAI");
+    expect(offAlphabet.status).toBe(400);
+  });
 });

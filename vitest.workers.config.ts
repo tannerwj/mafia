@@ -2,15 +2,18 @@ import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 import { defineConfig } from "vitest/config";
 
 // Server-side integration tests run inside workerd via the cloudflareTest()
-// Vite plugin. It reuses the same wrangler config as dev/deploy, so the
-// GAME_ROOMS Durable Object binding and the v1 SQLite migration are available.
+// Vite plugin. Normally they reuse the deploy config; an isolated local
+// config can be selected when a remote Workers AI preview is unavailable.
+// Both configs must provide GAME_ROOMS and the v1 SQLite migration.
 // `main` points the test isolate at the Worker entry so `SELF` (cloudflare:test)
 // dispatches to the real fetch handler and its Durable Objects.
 export default defineConfig({
   plugins: [
     cloudflareTest({
       main: "./src/server/index.ts",
-      wrangler: { configPath: "./wrangler.jsonc" },
+      wrangler: {
+        configPath: process.env.MAFIA_TEST_WRANGLER_CONFIG ?? "./wrangler.jsonc",
+      },
       // Test-only: honors client-supplied `start_game.seed` so D4's scripted
       // games get a deterministic role assignment. Never set in
       // wrangler.jsonc itself (that file is also `wrangler deploy`'s

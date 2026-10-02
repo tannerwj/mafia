@@ -43,7 +43,25 @@ export function truncateStackHead(stack: string): string {
  * (kept independent so this module never needs to import React glue). */
 export function roomCodeFromPathname(pathname: string): string | undefined {
   const match = /^\/room\/([^/]+)\/?$/.exec(pathname);
-  return match ? decodeURIComponent(match[1]!).toUpperCase() : undefined;
+  if (!match) return undefined;
+  try {
+    const code = decodeURIComponent(match[1]!).toUpperCase();
+    return /^[A-Z0-9]{5}$/.test(code) ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function diagnosticUrl(url: string): string {
+  try {
+    const parsed = new URL(url, "https://mafia.invalid");
+    parsed.search = "";
+    parsed.hash = "";
+    return url.startsWith("/") ? parsed.pathname : parsed.toString();
+  } catch {
+    const query = url.search(/[?#]/);
+    return url.slice(0, Math.min(query < 0 ? url.length : query, 2048));
+  }
 }
 
 let sharedReporter: ErrorReporter | null = null;
@@ -126,7 +144,7 @@ export function installGlobalErrorHandlers(
     reporter.report("onerror", {
       message: typeof e.message === "string" ? e.message : "Unknown error",
       stack: e.error?.stack,
-      url: win.location.href,
+      url: diagnosticUrl(win.location.href),
       roomCode: roomCodeFromPathname(win.location.pathname),
       ua: win.navigator.userAgent,
     });
@@ -140,7 +158,7 @@ export function installGlobalErrorHandlers(
     reporter.report("unhandledrejection", {
       message,
       stack,
-      url: win.location.href,
+      url: diagnosticUrl(win.location.href),
       roomCode: roomCodeFromPathname(win.location.pathname),
       ua: win.navigator.userAgent,
     });

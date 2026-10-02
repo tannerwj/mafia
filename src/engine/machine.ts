@@ -156,6 +156,13 @@ function submitAction(original: GameState, state: GameState, cmd: Extract<Comman
   if (state.phase !== "night") return reject(original, "not_your_phase", cmd.playerId);
   if (canSubmitMafiaVote(state, currentRoles(), cmd.playerId)) {
     if (!legalLivingTarget(state, cmd.playerId, cmd.targetId, false)) return reject(original, "illegal_target", cmd.playerId);
+    const existing = state.mafiaVotes.find((v) => v.playerId === cmd.playerId);
+    // Retries are common when a phone reconnects or a send acknowledgement is
+    // lost. Repeating the same still-tentative pick has no state transition;
+    // returning the original object lets the DO skip a storage write and
+    // broadcast. A matching locked pick remains a deliberate re-open, so it
+    // follows the normal submit path and clears the lock.
+    if (existing && existing.targetId === cmd.targetId && !existing.locked) return { state: original, effects: [] };
     state.mafiaVotes = state.mafiaVotes.filter((v) => v.playerId !== cmd.playerId);
     // Changing/(re)submitting a target always resets locked to false (Spec
     // 08): the voter is re-opening their choice, so partners see it's back
@@ -168,6 +175,8 @@ function submitAction(original: GameState, state: GameState, cmd: Extract<Comman
   if (!spec || spec.consensus === "mafia") return reject(original, "not_your_phase", cmd.playerId);
   const allowSelf = spec.targetRule === "living-any";
   if (!legalLivingTarget(state, cmd.playerId, cmd.targetId, allowSelf)) return reject(original, "illegal_target", cmd.playerId);
+  const existing = state.nightActions.find((a) => a.actorId === cmd.playerId);
+  if (existing && existing.targetId === cmd.targetId && !existing.locked) return { state: original, effects: [] };
   state.nightActions = state.nightActions.filter((a) => a.actorId !== cmd.playerId);
   // Spec 11: individual actions are pick→confirm — (re)submitting a target
   // always resets `locked` to false (same rule as mafia votes), so a stray
@@ -195,6 +204,7 @@ function setNightLock(original: GameState, state: GameState, playerId: string, l
     const vote = state.mafiaVotes.find((v) => v.playerId === playerId);
     if (locked && (!vote || vote.targetId === null)) return reject(original, "no_pick_to_lock", playerId);
     if (!vote) return reject(original, "not_lockable", playerId);
+    if (vote.locked === locked) return { state: original, effects: [] };
     vote.locked = locked;
     state.log.push({ type: locked ? "actionLocked" : "actionUnlocked", actorId: playerId, day: state.day });
     return advanceIfComplete(state, [], now);
@@ -206,6 +216,7 @@ function setNightLock(original: GameState, state: GameState, playerId: string, l
   const action = state.nightActions.find((a) => a.actorId === playerId);
   if (locked && (!action || action.targetId === null)) return reject(original, "no_pick_to_lock", playerId);
   if (!action) return reject(original, "not_lockable", playerId);
+  if (action.locked === locked) return { state: original, effects: [] };
   action.locked = locked;
   state.log.push({ type: locked ? "actionLocked" : "actionUnlocked", actorId: playerId, day: state.day });
   return advanceIfComplete(state, [], now);
@@ -217,6 +228,11 @@ function castVote(original: GameState, state: GameState, playerId: string, targe
     if (!state.ruleset.noMurderOption || state.phase === "runoff") return reject(original, "illegal_target", playerId);
   } else if (!state.players.some((p) => p.id === target && p.alive)) return reject(original, "illegal_target", playerId);
   if (state.phase === "runoff" && target !== "no_murder" && !state.runoffCandidates?.includes(target)) return reject(original, "illegal_target", playerId);
+  const existing = state.votes.find((v) => v.playerId === playerId);
+  // Repeating the same tentative pick is an acknowledged retry, not a new
+  // transition. A matching locked pick intentionally falls through so a
+  // recast re-opens it, just like submitAction.
+  if (existing && existing.target === target && !existing.locked) return { state: original, effects: [] };
   state.votes = state.votes.filter((v) => v.playerId !== playerId);
   // Spec 11: a cast vote is TENTATIVE (`locked:false`) — re-casting a
   // different target always returns it to tentative (same rule as night
@@ -228,6 +244,7 @@ function castVote(original: GameState, state: GameState, playerId: string, targe
 
 function retractVote(original: GameState, state: GameState, playerId: string): EngineResult {
   if (state.phase !== "day" && state.phase !== "runoff") return reject(original, "not_your_phase", playerId);
+  if (!state.votes.some((v) => v.playerId === playerId)) return { state: original, effects: [] };
   state.votes = state.votes.filter((v) => v.playerId !== playerId);
   state.log.push({ type: "voteRetracted", voterId: playerId, day: state.day, phase: state.phase });
   return { state, effects: [] };
@@ -242,6 +259,7 @@ function setVoteLock(original: GameState, state: GameState, playerId: string, lo
   const vote = state.votes.find((v) => v.playerId === playerId);
   if (locked && !vote) return reject(original, "no_pick_to_lock", playerId);
   if (!vote) return reject(original, "not_lockable", playerId);
+  if (vote.locked === locked) return { state: original, effects: [] };
   vote.locked = locked;
   state.log.push({ type: locked ? "voteLocked" : "voteUnlocked", voterId: playerId, day: state.day, phase: state.phase });
   return advanceIfComplete(state, [], now);

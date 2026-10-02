@@ -7,7 +7,16 @@ export type Route = { name: "home" } | { name: "room"; code: string };
 function parseRoute(pathname: string): Route {
   const match = /^\/room\/([^/]+)\/?$/.exec(pathname);
   if (match) {
-    return { name: "room", code: decodeURIComponent(match[1]!).toUpperCase() };
+    try {
+      const code = decodeURIComponent(match[1]!).toUpperCase();
+      // Keep the SPA's not-found screen reachable for any five-character
+      // alphanumeric code. The Worker API applies the stricter generated-code
+      // alphabet before it performs a Durable Object lookup.
+      if (/^[A-Z0-9]{5}$/.test(code)) return { name: "room", code };
+    } catch {
+      // Treat malformed URL escapes as an ordinary home route rather than
+      // allowing a browser supplied pathname to crash the app.
+    }
   }
   return { name: "home" };
 }
